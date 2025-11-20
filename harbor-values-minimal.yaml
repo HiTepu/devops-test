@@ -1,0 +1,63 @@
+expose:
+  type: loadBalancer
+  tls:
+    enabled: true
+    certSource: auto
+    auto:
+      commonName: "harbor.local"
+  loadBalancer:
+    name: harbor
+    IP: ""
+    ports:
+      httpPort: 80
+      httpsPort: 443
+
+externalURL: https://harbor.local
+
+# Storage tối thiểu tuyệt đối
+persistence:
+  enabled: true
+  resourcePolicy: "keep"
+  persistentVolumeClaim:
+    registry:
+      storageClass: "cstor-sc"
+      size: 3Gi  # Tối thiểu cho registry
+      accessMode: ReadWriteOnce
+    jobservice:
+      jobLog:
+        storageClass: "cstor-sc"
+        size: 200Mi
+        accessMode: ReadWriteOnce
+    database:
+      storageClass: "cstor-sc"
+      size: 1Gi  # Tối thiểu cho PostgreSQL
+      accessMode: ReadWriteOnce
+    redis:
+      storageClass: "cstor-sc"
+      size: 200Mi
+      accessMode: ReadWriteOnce
+
+harborAdminPassword: "Harbor12345"
+
+database:
+  type: internal
+  internal:
+    password: "changeit-db-pwd"
+
+redis:
+  type: internal
+  internal:
+    password: "changeit-redis-pwd"
+
+notary:
+  enabled: false
+
+chartmuseum:
+  enabled: false
+
+trivy:
+  enabled: false  # TẮT để tiết kiệm storage
+  persistence:
+    enabled: false
+metrics:
+  enabled: false

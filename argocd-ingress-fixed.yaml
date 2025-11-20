@@ -1,0 +1,28 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argocd-server-ingress
+  namespace: argocd
+  annotations:
+    # BỎ ssl-passthrough vì backend là HTTP
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    # Thêm annotation này để Ingress terminate SSL
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: argocd.192.168.1.241.nip.io
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: argocd-server
+            port:
+              number: 80  # Dùng port 80 vì ArgoCD chạy HTTP
+  tls:
+  - hosts:
+    - argocd.192.168.1.241.nip.io
+    secretName: argocd-server-tls

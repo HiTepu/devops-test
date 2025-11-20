@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-harbor
+  namespace: default
+spec:
+  containers:
+  - name: nginx
+    image: 192.168.1.243/demo/nginx:alpine
+    ports:
+    - containerPort: 80
+  imagePullSecrets:
+  - name: harbor-registry-secret

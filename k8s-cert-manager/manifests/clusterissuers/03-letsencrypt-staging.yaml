@@ -1,0 +1,26 @@
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+  labels:
+    app: cert-manager
+    issuer-type: acme
+    acme-env: staging
+spec:
+  acme:
+    # Let's Encrypt staging server
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    
+    # THAY ĐỔI EMAIL CỦA BẠN Ở ĐÂY
+    email: devops@yourdomain.com
+    
+    # Secret to store ACME account private key
+    privateKeySecretRef:
+      name: letsencrypt-staging-account-key
+    
+    # Solvers
+    solvers:
+    # HTTP-01 challenge
+    - http01:
+        ingress:
+          class: nginx

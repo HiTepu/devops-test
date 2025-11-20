@@ -1,0 +1,180 @@
+# ============================================
+# Cert-Manager Common Configuration
+# Compatible with MetalLB + OpenEBS cStor
+# ============================================
+
+global:
+  logLevel: 2
+  leaderElection:
+    namespace: cert-manager
+
+# Tự động cài đặt CRDs
+installCRDs: true
+
+# ============================================
+# CERT-MANAGER CONTROLLER
+# ============================================
+replicaCount: 2
+
+image:
+  repository: quay.io/jetstack/cert-manager-controller
+  tag: v1.16.2
+  pullPolicy: IfNotPresent
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# Pod distribution - chạy trên worker nodes
+affinity:
+  nodeAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      preference:
+        matchExpressions:
+        - key: node-role.kubernetes.io/control-plane
+          operator: DoesNotExist
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      podAffinityTerm:
+        labelSelector:
+          matchExpressions:
+          - key: app.kubernetes.io/name
+            operator: In
+            values:
+            - cert-manager
+        topologyKey: kubernetes.io/hostname
+
+# Security context
+securityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+    - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+
+# Extra arguments
+extraArgs:
+  - --dns01-recursive-nameservers-only
+  - --dns01-recursive-nameservers=8.8.8.8:53,1.1.1.1:53
+
+# Prometheus monitoring
+prometheus:
+  enabled: true
+  servicemonitor:
+    enabled: true
+    prometheusInstance: default
+    interval: 60s
+    scrapeTimeout: 30s
+
+# ============================================
+# WEBHOOK
+# ============================================
+webhook:
+  replicaCount: 2
+  
+  image:
+    repository: quay.io/jetstack/cert-manager-webhook
+    tag: v1.16.2
+  
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+  
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+      - ALL
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+  
+  service:
+    type: ClusterIP
+  
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        preference:
+          matchExpressions:
+          - key: node-role.kubernetes.io/control-plane
+            operator: DoesNotExist
+
+# ============================================
+# CA INJECTOR
+# ============================================
+cainjector:
+  replicaCount: 2
+  
+  image:
+    repository: quay.io/jetstack/cert-manager-cainjector
+    tag: v1.16.2
+  
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+  
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+      - ALL
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+  
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        preference:
+          matchExpressions:
+          - key: node-role.kubernetes.io/control-plane
+            operator: DoesNotExist
+
+# ============================================
+# STARTUP API CHECK
+# ============================================
+startupapicheck:
+  enabled: true
+  
+  image:
+    repository: quay.io/jetstack/cert-manager-startupapicheck
+    tag: v1.16.2
+  
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 50m
+      memory: 64Mi

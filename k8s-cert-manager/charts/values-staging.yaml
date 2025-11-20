@@ -1,0 +1,25 @@
+# ============================================
+# Staging Environment Overrides
+# ============================================
+
+global:
+  logLevel: 3
+
+replicaCount: 2
+
+webhook:
+  replicaCount: 2
+
+cainjector:
+  replicaCount: 2
+
+resources:
+  requests:
+    cpu: 150m
+    memory: 192Mi
+  limits:
+    cpu: 600m
+    memory: 768Mi
+
+podAnnotations:
+  environment: staging

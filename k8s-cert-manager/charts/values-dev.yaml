@@ -1,0 +1,30 @@
+# ============================================
+# Development Environment Overrides
+# ============================================
+
+global:
+  logLevel: 4
+
+replicaCount: 1
+
+webhook:
+  replicaCount: 1
+
+cainjector:
+  replicaCount: 1
+
+extraArgs:
+  - --v=4
+  - --dns01-recursive-nameservers-only
+  - --dns01-recursive-nameservers=8.8.8.8:53,1.1.1.1:53
+  - --feature-gates=ExperimentalCertificateSigningRequestControllers=true
+
+podAnnotations:
+  environment: development
+  maintainer: devops-team
+
+prometheus:
+  enabled: true
+  servicemonitor:
+    enabled: true
+    interval: 60s

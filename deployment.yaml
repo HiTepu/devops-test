@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-from-harbor
+  namespace: default
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nginx-harbor
+  template:
+    metadata:
+      labels:
+        app: nginx-harbor
+    spec:
+      containers:
+      - name: nginx
+        image: 192.168.1.243/demo/nginx:alpine
+        ports:
+        - containerPort: 80
+      imagePullSecrets:
+      - name: harbor-registry-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-harbor-svc
+  namespace: default
+spec:
+  selector:
+    app: nginx-harbor
+  ports:
+  - port: 80
+    targetPort: 80
+  type: LoadBalancer

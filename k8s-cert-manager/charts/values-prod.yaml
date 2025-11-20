@@ -1,0 +1,61 @@
+# ============================================
+# Production Environment Overrides
+# ============================================
+
+global:
+  logLevel: 2
+
+replicaCount: 3
+
+webhook:
+  replicaCount: 3
+
+cainjector:
+  replicaCount: 3
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+webhook:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 384Mi
+
+cainjector:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 384Mi
+
+affinity:
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+    - labelSelector:
+        matchExpressions:
+        - key: app.kubernetes.io/name
+          operator: In
+          values:
+          - cert-manager
+      topologyKey: kubernetes.io/hostname
+
+podAnnotations:
+  environment: production
+
+prometheus:
+  enabled: true
+  servicemonitor:
+    enabled: true
+    interval: 30s
+    scrapeTimeout: 15s

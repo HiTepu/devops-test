@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metrics-server
+  namespace: kube-system
+  labels:
+    k8s-app: metrics-server
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      k8s-app: metrics-server
+  template:
+    metadata:
+      labels:
+        k8s-app: metrics-server
+    spec:
+      serviceAccountName: metrics-server
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: k8s-app
+                    operator: In
+                    values:
+                      - metrics-server
+              topologyKey: "kubernetes.io/hostname"
+      containers:
+        - name: metrics-server
+          image: k8s.gcr.io/metrics-server/metrics-server:v0.12.2
+          imagePullPolicy: IfNotPresent
+          args:
+            - --cert-dir=/tmp
+            - --kubelet-insecure-tls
+            - --kubelet-preferred-address-types=InternalIP
+          ports:
+            - containerPort: 4443
+              name: main-port
+          resources:
+            limits:
+              cpu: 100m
+              memory: 200Mi
+            requests:
+              cpu: 50m
+              memory: 100Mi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: metrics-server
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: system:metrics-server
+rules:
+  - apiGroups: [""]
+    resources:
+      - pods
+      - nodes
+      - nodes/stats
+      - namespaces
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: metrics-server:system:auth-delegator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:metrics-server
+subjects:
+  - kind: ServiceAccount
+    name: metrics-server
+    namespace: kube-system

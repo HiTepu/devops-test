@@ -1,0 +1,17 @@
+expose:
+  type: loadBalancer
+  loadBalancer:
+    IP: 192.168.1.243
+    ports:
+      httpPort: 80
+      httpsPort: 443
+  tls:
+    enabled: true
+    certSource: secret
+    secret:
+      secretName: harbor-tls
+      notarySecretName: harbor-tls
+
+externalURL: https://192.168.1.243
+
+# Các settings khác giữ nguyên từ file harbor-current-values.yaml

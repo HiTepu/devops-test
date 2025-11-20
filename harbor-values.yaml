@@ -1,0 +1,59 @@
+USER-SUPPLIED VALUES:
+chartmuseum:
+  enabled: false
+database:
+  internal:
+    password: changeit-db-pwd
+  type: internal
+expose:
+  loadBalancer:
+    IP: 192.168.1.243
+    name: harbor
+    ports:
+      httpPort: 80
+      httpsPort: 443
+    sourceRanges: []
+  tls:
+    certSource: secret
+    enabled: true
+    secret:
+      notarySecretName: harbor-ingress-tls
+      secretName: harbor-ingress-tls
+  type: loadBalancer
+externalURL: https://harbor.local
+harborAdminPassword: Harbor12345
+metrics:
+  enabled: false
+notary:
+  enabled: false
+persistence:
+  enabled: true
+  persistentVolumeClaim:
+    database:
+      accessMode: ReadWriteOnce
+      size: 2Gi
+      storageClass: cstor-csi-disk
+    jobservice:
+      jobLog:
+        accessMode: ReadWriteOnce
+        size: 500Mi
+        storageClass: cstor-csi-disk
+    redis:
+      accessMode: ReadWriteOnce
+      size: 500Mi
+      storageClass: cstor-csi-disk
+    registry:
+      accessMode: ReadWriteOnce
+      size: 10Gi
+      storageClass: cstor-csi-disk
+    trivy:
+      accessMode: ReadWriteOnce
+      size: 2Gi
+      storageClass: cstor-csi-disk
+  resourcePolicy: keep
+redis:
+  internal:
+    password: changeit-redis-pwd
+  type: internal
+trivy:
+  enabled: true

@@ -1,0 +1,20 @@
+apiVersion: openebs.io/v1alpha1
+kind: BlockDevice
+metadata:
+  name: blockdevice-node5
+  namespace: openebs
+  labels:
+    kubernetes.io/hostname: "node5"
+spec:
+  capacity:
+    storage: 20000000000   # 20 GB ~ 20e9 bytes
+  details:
+    deviceType: "loop"
+    model: "loop11"
+  devlinks:
+    - kind: by-path
+      links:
+        - /dev/loop11
+  path: /dev/loop11
+  nodeAttributes:
+    nodeName: "node5"

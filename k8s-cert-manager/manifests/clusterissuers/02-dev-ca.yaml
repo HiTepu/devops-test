@@ -1,0 +1,101 @@
+---
+# Root CA Certificate for Development
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: dev-root-ca
+  namespace: cert-manager
+  labels:
+    app: cert-manager
+    ca-type: root
+    environment: development
+spec:
+  isCA: true
+  commonName: "Development Root CA"
+  subject:
+    organizations:
+      - "Your Organization Dev"
+    organizationalUnits:
+      - "DevOps Team"
+    countries:
+      - "VN"
+    localities:
+      - "Hanoi"
+  secretName: dev-root-ca-secret
+  privateKey:
+    algorithm: RSA
+    encoding: PKCS8
+    size: 4096
+  duration: 87600h  # 10 years
+  renewBefore: 8760h  # 1 year before expiry
+  issuerRef:
+    name: selfsigned-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
+
+---
+# Root CA ClusterIssuer
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: dev-root-ca-issuer
+  labels:
+    app: cert-manager
+    issuer-type: ca
+    ca-level: root
+    environment: development
+spec:
+  ca:
+    secretName: dev-root-ca-secret
+
+---
+# Intermediate CA Certificate
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: dev-intermediate-ca
+  namespace: cert-manager
+  labels:
+    app: cert-manager
+    ca-type: intermediate
+    environment: development
+spec:
+  isCA: true
+  commonName: "Development Intermediate CA"
+  subject:
+    organizations:
+      - "Your Organization Dev"
+    organizationalUnits:
+      - "DevOps Team"
+    countries:
+      - "VN"
+  secretName: dev-intermediate-ca-secret
+  privateKey:
+    algorithm: RSA
+    encoding: PKCS8
+    size: 4096
+  duration: 43800h  # 5 years
+  renewBefore: 4380h  # 6 months before expiry
+  usages:
+    - digital signature
+    - cert sign
+    - crl sign
+  issuerRef:
+    name: dev-root-ca-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
+
+---
+# Development CA ClusterIssuer (Intermediate) - DÙNG CÁI NÀY CHO DEV
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: dev-ca-issuer
+  labels:
+    app: cert-manager
+    issuer-type: ca
+    ca-level: intermediate
+    environment: development
+spec:
+  ca:
+    secretName: dev-intermediate-ca-secret
