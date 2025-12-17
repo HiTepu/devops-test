@@ -28,16 +28,18 @@ jobs:
           echo "${{ secrets.HARBOR_CA }}" > $HOME/.docker/certs.d/harbor.lmsx.io.vn/ca.crt
 
       - name: Login to Harbor
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           registry: ${{ env.HARBOR_URL }}
           username: ${{ secrets.HARBOR_USERNAME }}
           password: ${{ secrets.HARBOR_PASSWORD }}
 
-      - name: Build and push Docker image
-        run: |
-          docker build -t ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:alpine .
-          docker push ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:alpine
+      - name: Build & Push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: harbor.lmsx.io.vn/demo/nginx:alpine
 
       - name: Update Kubernetes manifest image tag
         run: |
