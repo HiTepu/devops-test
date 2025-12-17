@@ -22,6 +22,11 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
+      - name: Configure Docker to trust Harbor CA
+        run: |
+          mkdir -p /etc/docker/certs.d/harbor.lmsx.io.vn
+          echo "${{ secrets.HARBOR_CA }}" > /etc/docker/certs.d/harbor.lmsx.io.vn/ca.crt
+
       - name: Login to Harbor
         uses: docker/login-action@v2
         with:
