@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ main, develop ]
 
+permissions:
+  contents: write
+
 env:
   HARBOR_URL: harbor.lmsx.io.vn
   HARBOR_PROJECT: demo
