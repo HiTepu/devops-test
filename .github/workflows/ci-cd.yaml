@@ -24,7 +24,7 @@ jobs:
 
       - name: Configure Docker to trust Harbor CA
         run: |
-          mkdir -p /etc/docker/certs.d/harbor.lmsx.io.vn
+          mkdir -p $HOME/.docker/certs.d/harbor.lmsx.io.vn
           echo "${{ secrets.HARBOR_CA }}" > $HOME/.docker/certs.d/harbor.lmsx.io.vn/ca.crt
 
       - name: Login to Harbor
@@ -41,7 +41,7 @@ jobs:
 
       - name: Update Kubernetes manifest image tag
         run: |
-          sed -i "s|image:.*|image: ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:latest|" k8s-manifests/demo/deployment.yaml
+          sed -i "s|image:.*|image: ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:alpine|" k8s-manifests/demo/deployment.yaml
 
       - name: Commit updated manifest
         run: |
