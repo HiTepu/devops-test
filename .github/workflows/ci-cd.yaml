@@ -42,7 +42,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        users: docker/metadata-action@v5
+        uses: docker/metadata-action@v5
         with:
           images: ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}
           tags: |
