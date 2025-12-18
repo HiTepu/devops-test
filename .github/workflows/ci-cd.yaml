@@ -3,6 +3,7 @@ name: CI/CD Pipeline
 on:
   push:
     branches: [ main, develop ]
+    tags: [ 'v*.*.*' ]
   pull_request:
     branches: [ main, develop ]
 
@@ -17,13 +18,15 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.meta.outputs.version  }}
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
 
       - name: Configure Docker to trust Harbor CA
         run: |
@@ -37,16 +40,27 @@ jobs:
           username: ${{ secrets.HARBOR_USERNAME }}
           password: ${{ secrets.HARBOR_PASSWORD }}
 
+      - name: Extract metadata
+        id: meta
+        users: docker/metadata-action@v5
+        with:
+          images: ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,format=short
+            type=raw,value=alpine
+            type=raw,value=latest,enable={{is_default_branch}}
       - name: Build & Push image
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: true
-          tags: harbor.lmsx.io.vn/demo/nginx:alpine
-
-      - name: Update Kubernetes manifest image tag
-        run: |
-          sed -i "s|image:.*|image: ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:alpine|" k8s-manifests/demo/deployment.yaml
+          push: ${{ github.event_name !='pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      #- name: Update Kubernetes manifest image tag
+       # run: |
+        #  sed -i "s|image:.*|image: ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:alpine|" k8s-manifests/demo/deployment.yaml
 
       - name: Commit updated manifest
         run: |
