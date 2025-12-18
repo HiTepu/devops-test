@@ -75,38 +75,33 @@ jobs:
           echo "- \`${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ steps.image-tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:latest\`" >> $GITHUB_STEP_SUMMARY
 
-   deploy:
+  deploy:  # ✅ ĐÚNG: Ngang hàng với build-and-push (2 spaces từ đầu dòng)
     needs: build-and-push
     runs-on: ubuntu-latest
     if: ${{ github.ref == 'refs/heads/main' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-    
-      # Setup kubectl FIRST
+      
       - name: Setup kubectl
         uses: azure/setup-kubectl@v3
-    
-      # Configure kubeconfig BEFORE any kubectl commands
+      
       - name: Configure kubeconfig
         run: |
           mkdir -p $HOME/.kube
           echo "${{ secrets.KUBECONFIG }}" | base64 -d > $HOME/.kube/config
           chmod 600 $HOME/.kube/config
-    
-      # Verify connection
+      
       - name: Verify cluster connection
         run: |
           kubectl cluster-info
           kubectl get nodes
-    
-      # Now update the manifest
+      
       - name: Update Kubernetes manifest
         run: |
           sed -i "s|image:.*|image: ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image-tag }}|g" k8s-manifests/demo/deployment.yaml
           cat k8s-manifests/demo/deployment.yaml
-    
-      #  Commit and push changes
+      
       - name: Commit and push changes
         run: |
           git config user.name "GitHub Actions"
@@ -114,14 +109,26 @@ jobs:
           git add k8s-manifests/demo/deployment.yaml
           git diff --staged --quiet || git commit -m "🚀 Update image to ${{ needs.build-and-push.outputs.image-tag }} [skip ci]"
           git push origin ${{ github.ref_name }}
-    
-    # Deploy to Kubernetes
-    - name: Deploy to Kubernetes
-      run: |
-        kubectl apply -f k8s-manifests/demo/
-        kubectl rollout status deployment/${{ env.IMAGE_NAME }} -n demo --timeout=300s
-        echo "### ✅ Deployment Status" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-        kubectl get deployment ${{ env.IMAGE_NAME }} -n demo >> $GITHUB_STEP_SUMMARY
-        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+      
+      - name: Deploy to Kubernetes
+        run: |
+          kubectl apply -f k8s-manifests/demo/
+          kubectl rollout status deployment/${{ env.IMAGE_NAME }} -n demo --timeout=300s
+          echo "### ✅ Deployment Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          kubectl get deployment ${{ env.IMAGE_NAME }} -n demo >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+```
+
+## Điểm quan trọng:
+
+- `deploy:` phải thụt lề **2 spaces** (ngang hàng với `build-and-push:`)
+- Trong YAML, indentation rất quan trọng và phải dùng spaces (không dùng tabs)
+- Cấu trúc đúng:
+```
+  jobs:
+    job1:
+      ...
+    job2:
+      ...
