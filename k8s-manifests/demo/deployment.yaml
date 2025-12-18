@@ -1,35 +1,29 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: nginx-from-harbor
-  namespace: default
+  name: nginx
+  namespace: demo
 spec:
   replicas: 2
   selector:
     matchLabels:
-      app: nginx-harbor
+      app: nginx
   template:
     metadata:
       labels:
-        app: nginx-harbor
+        app: nginx
     spec:
       containers:
       - name: nginx
-        image: harbor.lmsx.io.vn/demo/nginx:alpine
+        image: harbor.lmsx.io.vn/demo/nginx:latest
         ports:
         - containerPort: 80
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "100m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
       imagePullSecrets:
-      - name: harbor-registry-secret
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: nginx-harbor-svc
-  namespace: default
-spec:
-  selector:
-    app: nginx-harbor
-  ports:
-  - port: 80
-    targetPort: 80
-  type: LoadBalancer
+      - name: harbor-secret

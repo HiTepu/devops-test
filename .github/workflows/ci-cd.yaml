@@ -16,10 +16,29 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.image-tag.outputs.tag }}
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      
+      - name: Set image tag
+        id: image-tag
+        run: |
+          TAG="${{ github.sha }}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Image tag: $TAG"
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Login to Harbor
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.HARBOR_URL }}
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
       
       - name: Install skopeo
         run: |
@@ -35,18 +54,68 @@ jobs:
           HARBOR_USER: ${{ secrets.HARBOR_USERNAME }}
           HARBOR_PASS: ${{ secrets.HARBOR_PASSWORD }}
         run: |
-          # Push với skopeo
+          echo "Pushing images..."
+          
+          skopeo copy \
+            --dest-creds="${HARBOR_USER}:${HARBOR_PASS}" \
+            docker-daemon:local-image:latest \
+            docker://${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ steps.image-tag.outputs.tag }}
+          
           skopeo copy \
             --dest-creds="${HARBOR_USER}:${HARBOR_PASS}" \
             docker-daemon:local-image:latest \
             docker://${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:latest
           
-          skopeo copy \
-            --dest-creds="${HARBOR_USER}:${HARBOR_PASS}" \
-            docker-daemon:local-image:latest \
-            docker://${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          echo "✅ Images pushed successfully!"
+      
+      - name: Verify images
+        run: |
+          echo "### 🐳 Pushed Images" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ steps.image-tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:latest\`" >> $GITHUB_STEP_SUMMARY
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Update Kubernetes manifest
+        run: |
+          # Update image tag in deployment file
+          sed -i "s|image:.*|image: ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image-tag }}|g" k8s-manifests/demo/deployment.yaml
           
-          skopeo copy \
-            --dest-creds="${HARBOR_USER}:${HARBOR_PASS}" \
-            docker-daemon:local-image:latest \
-            docker://${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:alpine
+          cat k8s-manifests/demo/deployment.yaml
+      
+      - name: Commit and push changes
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          
+          git add k8s-manifests/demo/deployment.yaml
+          git diff --staged --quiet || git commit -m "🚀 Update image to ${{ needs.build-and-push.outputs.image-tag }} [skip ci]"
+          git push origin ${{ github.ref_name }}
+      
+      # Option 1: Deploy bằng kubectl (nếu có kubeconfig)
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+      
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBECONFIG }}" | base64 -d > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+      
+      - name: Deploy to Kubernetes
+        run: |
+          kubectl apply -f k8s-manifests/demo/
+          kubectl rollout status deployment/${{ env.IMAGE_NAME }} -n demo --timeout=300s
+          
+          echo "### ✅ Deployment Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          kubectl get deployment ${{ env.IMAGE_NAME }} -n demo >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
