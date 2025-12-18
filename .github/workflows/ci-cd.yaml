@@ -1,10 +1,12 @@
 name: CI/CD Pipeline
+
 on:
   push:
     branches: [ main, develop ]
     tags: [ 'v*.*.*' ]
   pull_request:
     branches: [ main, develop ]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -19,21 +21,42 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image-tag: ${{ steps.meta.outputs.version }}
-
+    
     steps:
-      - name: Checkout repo
+      - name: Checkout code
         uses: actions/checkout@v4
-
+      
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
+      
+      # Debug step - Check secrets
+      - name: Debug - Verify secrets exist
+        run: |
+          echo "HARBOR_URL: ${{ env.HARBOR_URL }}"
+          echo "HARBOR_PROJECT: ${{ env.HARBOR_PROJECT }}"
+          echo "HARBOR_USERNAME is set: ${{ secrets.HARBOR_USERNAME != '' }}"
+          echo "HARBOR_PASSWORD is set: ${{ secrets.HARBOR_PASSWORD != '' }}"
+      
+      # Debug step - Check Harbor API access
+      - name: Debug - Test Harbor API
+        run: |
+          echo "Testing Harbor API access..."
+          curl -u "${{ secrets.HARBOR_USERNAME }}:${{ secrets.HARBOR_PASSWORD }}" \
+            "https://${{ env.HARBOR_URL }}/api/v2.0/projects/${{ env.HARBOR_PROJECT }}" || echo "API call failed"
+          
+          echo "Listing repositories..."
+          curl -u "${{ secrets.HARBOR_USERNAME }}:${{ secrets.HARBOR_PASSWORD }}" \
+            "https://${{ env.HARBOR_URL }}/api/v2.0/projects/${{ env.HARBOR_PROJECT }}/repositories" || echo "List repos failed"
+      
+      # Login to Harbor
       - name: Login to Harbor
         uses: docker/login-action@v3
         with:
           registry: ${{ env.HARBOR_URL }}
           username: ${{ secrets.HARBOR_USERNAME }}
           password: ${{ secrets.HARBOR_PASSWORD }}
-
+      
+      # Extract metadata for tags
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -44,23 +67,60 @@ jobs:
             type=sha,format=short
             type=raw,value=alpine
             type=raw,value=latest,enable={{is_default_branch}}
-
-      - name: Build & Push image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: false
-          sbom: false
-
-      - name: Commit updated manifest
+      
+      # Build image locally first
+      - name: Build Docker image
+        run: |
+          echo "Building image..."
+          docker build -t ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ github.sha }} .
+          
+          echo "Tagging image..."
+          docker tag ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:latest
+          
+          docker tag ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:alpine
+          
+          docker tag ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+      
+      # Push image with docker CLI
+      - name: Push Docker image
         if: github.event_name != 'pull_request'
+        run: |
+          echo "Pushing images..."
+          docker push ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:latest
+          docker push ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:alpine
+          docker push ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+          
+          echo "Successfully pushed all images!"
+      
+      # Verify pushed images
+      - name: Verify images in Harbor
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "Verifying images in Harbor..."
+          curl -u "${{ secrets.HARBOR_USERNAME }}:${{ secrets.HARBOR_PASSWORD }}" \
+            "https://${{ env.HARBOR_URL }}/api/v2.0/projects/${{ env.HARBOR_PROJECT }}/repositories/${{ env.IMAGE_NAME }}/artifacts" | jq '.[].tags[].name'
+      
+      # Update Kubernetes manifest (if exists)
+      - name: Update Kubernetes manifest
+        if: github.event_name != 'pull_request' && hashFiles('k8s-manifests/demo/deployment.yaml') != ''
+        run: |
+          if [ -f "k8s-manifests/demo/deployment.yaml" ]; then
+            sed -i "s|image:.*|image: ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|" k8s-manifests/demo/deployment.yaml
+            echo "Updated deployment.yaml with new image tag"
+          else
+            echo "deployment.yaml not found, skipping update"
+          fi
+      
+      # Commit and push changes
+      - name: Commit and push manifest changes
+        if: github.event_name != 'pull_request' && hashFiles('k8s-manifests/demo/deployment.yaml') != ''
         run: |
           git config user.name "Hitepu"
           git config user.email "hiep18797@gmail.com"
           git add k8s-manifests/demo/deployment.yaml || true
-          git commit -m "Update image to latest [skip ci]" || echo "No changes"
-          git push origin main || echo "Nothing to push"
+          git diff --staged --quiet || git commit -m "Update image to ${{ github.sha }} [skip ci]"
+          git push origin ${{ github.ref_name }} || echo "Nothing to push"
