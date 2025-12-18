@@ -5,6 +5,9 @@ on:
     branches: [ main, develop ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 env:
   HARBOR_URL: harbor.lmsx.io.vn
   HARBOR_PROJECT: demo
@@ -13,30 +16,13 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
       
-      # Install Harbor Certificate
-      - name: Setup Harbor SSL Certificate
-        run: |
-          echo "Setting up Harbor certificate..."
-          
-          # Download certificate
-          curl -k https://${{ env.HARBOR_URL }}/api/v2.0/systeminfo/getcert -o /tmp/harbor-ca.crt
-          
-          # Install for system
-          sudo cp /tmp/harbor-ca.crt /usr/local/share/ca-certificates/harbor-ca.crt
-          sudo update-ca-certificates
-          
-          # Install for Docker
-          sudo mkdir -p /etc/docker/certs.d/${{ env.HARBOR_URL }}
-          sudo cp /tmp/harbor-ca.crt /etc/docker/certs.d/${{ env.HARBOR_URL }}/ca.crt
-          
-          # Verify
-          ls -la /etc/docker/certs.d/${{ env.HARBOR_URL }}/
-          echo "✅ Harbor certificate installed"
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
       
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -46,26 +32,47 @@ jobs:
             network=host
       
       - name: Login to Harbor
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.HARBOR_URL }}
-          username: ${{ secrets.HARBOR_USERNAME }}
-          password: ${{ secrets.HARBOR_PASSWORD }}
-
-      - name: Build Docker image
         run: |
-          docker build -t ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ github.sha }} .
-          docker tag ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
-            ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:latest
+          echo "${{ secrets.HARBOR_PASSWORD }}" | docker login ${{ env.HARBOR_URL }} \
+            --username ${{ secrets.HARBOR_USERNAME }} \
+            --password-stdin
       
-      - name: Push to Harbor
+      - name: Generate tags
+        id: meta
         run: |
-          docker push ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          TAGS="${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:latest"
+          TAGS="$TAGS,${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          TAGS="$TAGS,${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:alpine"
+          echo "tags=$TAGS" >> $GITHUB_OUTPUT
+      
+      # Build image và export sang Docker
+      - name: Build and load image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          load: true  # Load vào Docker daemon thay vì push trực tiếp
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+          sbom: false
+      
+      # Push bằng docker CLI
+      - name: Push images to Harbor
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "Pushing images..."
+          
           docker push ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:latest
-          echo "✅ Images pushed successfully"
+          docker push ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:alpine
+          
+          echo "✅ All images pushed successfully!"
       
       - name: Verify images in Harbor
+        if: github.event_name != 'pull_request'
         run: |
+          echo "Verifying pushed images..."
           curl -u "${{ secrets.HARBOR_USERNAME }}:${{ secrets.HARBOR_PASSWORD }}" \
-            "https://${{ env.HARBOR_URL }}/api/v2.0/projects/${{ env.HARBOR_PROJECT }}/repositories/${{ env.IMAGE_NAME }}/artifacts" | \
-            jq -r '.[].tags[].name' | head -5
+            "https://${{ env.HARBOR_URL }}/api/v2.0/projects/${{ env.HARBOR_PROJECT }}/repositories/${{ env.IMAGE_NAME }}/artifacts" \
+            | jq -r '.[].tags[].name' || echo "Failed to verify"
