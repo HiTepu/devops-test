@@ -1,5 +1,4 @@
 name: CI/CD Pipeline
-
 on:
   push:
     branches: [ main, develop ]
@@ -19,27 +18,14 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     outputs:
-      image-tag: ${{ steps.meta.outputs.version  }}
+      image-tag: ${{ steps.meta.outputs.version }}
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-      - name: Debug - List repositories
-        run: |
-          echo "Testing API access..."
-          curl -u "${{ secrets.HARBOR_USERNAME }}:${{ secrets.HARBOR_PASSWORD }}" \
-          https://${{ env.HARBOR_URL }}/api/v2.0/projects/${{ env.HARBOR_PROJECT }}/repositories || echo "Failed to list repos"
 
-          echo "Testing project info..."
-          curl -u "${{ secrets.HARBOR_USERNAME }}:${{ secrets.HARBOR_PASSWORD }}" \
-          https://${{ env.HARBOR_URL }}/api/v2.0/projects/${{ env.HARBOR_PROJECT }} || echo "Failed to get project"
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
-      - name: Configure Docker to trust Harbor CA
-        run: |
-          mkdir -p $HOME/.docker/certs.d/harbor.lmsx.io.vn
-          echo "${{ secrets.HARBOR_CA }}" > $HOME/.docker/certs.d/harbor.lmsx.io.vn/ca.crt
 
       - name: Login to Harbor
         uses: docker/login-action@v3
@@ -58,22 +44,23 @@ jobs:
             type=sha,format=short
             type=raw,value=alpine
             type=raw,value=latest,enable={{is_default_branch}}
+
       - name: Build & Push image
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: ${{ github.event_name !='pull_request' }}
+          push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      #- name: Update Kubernetes manifest image tag
-       # run: |
-        #  sed -i "s|image:.*|image: ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:alpine|" k8s-manifests/demo/deployment.yaml
+          provenance: false
+          sbom: false
 
       - name: Commit updated manifest
+        if: github.event_name != 'pull_request'
         run: |
           git config user.name "Hitepu"
           git config user.email "hiep18797@gmail.com"
-          git add k8s-manifests/demo/deployment.yaml
+          git add k8s-manifests/demo/deployment.yaml || true
           git commit -m "Update image to latest [skip ci]" || echo "No changes"
-          git push origin main
+          git push origin main || echo "Nothing to push"
