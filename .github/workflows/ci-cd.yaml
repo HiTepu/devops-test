@@ -119,16 +119,4 @@ jobs:
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           kubectl get deployment ${{ env.IMAGE_NAME }} -n demo >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-```
 
-## Điểm quan trọng:
-
-- `deploy:` phải thụt lề **2 spaces** (ngang hàng với `build-and-push:`)
-- Trong YAML, indentation rất quan trọng và phải dùng spaces (không dùng tabs)
-- Cấu trúc đúng:
-```
-  jobs:
-    job1:
-      ...
-    job2:
-      ...
