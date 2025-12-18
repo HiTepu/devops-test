@@ -1,9 +1,6 @@
-# .github/workflows/test-harbor-debug.yml
 name: Debug Harbor Login
-
 on:
   workflow_dispatch:
-
 jobs:
   debug:
     runs-on: ubuntu-latest
@@ -14,24 +11,20 @@ jobs:
         echo "HARBOR_USERNAME is set: ${{ secrets.HARBOR_USERNAME != '' }}"
         echo "HARBOR_PASSWORD is set: ${{ secrets.HARBOR_PASSWORD != '' }}"
         echo "HARBOR_PROJECT is set: ${{ secrets.HARBOR_PROJECT != '' }}"
-        
+
     - name: Show Harbor URL (safe)
       run: |
         echo "Harbor URL: ${{ secrets.HARBOR_URL }}"
         echo "Harbor Project: ${{ secrets.HARBOR_PROJECT }}"
-        echo "Username length: ${#HARBOR_USERNAME}"
-        echo "Password length: ${#HARBOR_PASSWORD}"
-      env:
-        HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
-        HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
-        
+        echo "Username: ${{ secrets.HARBOR_USERNAME }}"
+
     - name: Test login
       run: |
         echo "Testing login..."
         echo "${{ secrets.HARBOR_PASSWORD }}" | docker login ${{ secrets.HARBOR_URL }} \
-          --username "${{ secrets.HARBOR_USERNAME }}" \
+          --username ${{ secrets.HARBOR_USERNAME }} \
           --password-stdin
-        
+
     - name: Test push
       run: |
         docker pull nginx:alpine
