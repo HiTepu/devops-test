@@ -6,13 +6,11 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    
     steps:
       - name: Test network connectivity
         run: |
           echo "Testing DNS resolution..."
           nslookup harbor.lmsx.io.vn
-          
           echo "Testing HTTPS connection..."
           curl -v https://harbor.lmsx.io.vn/v2/
       
