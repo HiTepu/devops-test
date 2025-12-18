@@ -25,14 +25,14 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
       - name: Debug - List repositories
-  run: |
-    echo "Testing API access..."
-    curl -u "${{ secrets.HARBOR_USERNAME }}:${{ secrets.HARBOR_PASSWORD }}" \
-      https://${{ env.HARBOR_URL }}/api/v2.0/projects/${{ env.HARBOR_PROJECT }}/repositories || echo "Failed to list repos"
-    
-    echo "Testing project info..."
-    curl -u "${{ secrets.HARBOR_USERNAME }}:${{ secrets.HARBOR_PASSWORD }}" \
-      https://${{ env.HARBOR_URL }}/api/v2.0/projects/${{ env.HARBOR_PROJECT }} || echo "Failed to get project"
+        run: |
+          echo "Testing API access..."
+          curl -u "${{ secrets.HARBOR_USERNAME }}:${{ secrets.HARBOR_PASSWORD }}" \
+          https://${{ env.HARBOR_URL }}/api/v2.0/projects/${{ env.HARBOR_PROJECT }}/repositories || echo "Failed to list repos"
+
+          echo "Testing project info..."
+          curl -u "${{ secrets.HARBOR_USERNAME }}:${{ secrets.HARBOR_PASSWORD }}" \
+          https://${{ env.HARBOR_URL }}/api/v2.0/projects/${{ env.HARBOR_PROJECT }} || echo "Failed to get project"
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
