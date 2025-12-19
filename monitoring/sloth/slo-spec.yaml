@@ -6,10 +6,11 @@ labels:
   owner: "sre-team"
 
 slos:
-  # 1️⃣ Deployment Success Rate
+
+  # 1. Deployment Availability
   - name: deployment-availability
     objective: 99.9
-    description: Deployments should succeed 99.9% of the time
+    description: "Deployments should succeed 99.9% of the time"
     sli:
       events:
         error_query: |
@@ -18,17 +19,14 @@ slos:
           sum(rate(cicd_deployment_status[5m]))
     alerting:
       name: DeploymentAvailability
-      page_alert:
-        labels:
-          severity: critical
-      ticket_alert:
-        labels:
-          severity: warning
+      labels:
+        category: availability
+        component: deployment
 
-  # 2️⃣ Build Success Rate
+  # 2. Build Availability
   - name: build-availability
     objective: 99.5
-    description: Builds should succeed 99.5% of the time
+    description: "Builds should succeed 99.5% of the time"
     sli:
       events:
         error_query: |
@@ -37,34 +35,32 @@ slos:
           sum(rate(cicd_build_status[5m]))
     alerting:
       name: BuildAvailability
-      page_alert:
-        labels:
-          severity: critical
+      labels:
+        category: availability
+        component: build
 
-  # 3️⃣ Build Latency (P95 < 5m)
+  # 3. Build Latency (error = build > 5 minutes)
   - name: build-latency
     objective: 95
-    description: 95% of builds complete under 5 minutes
+    description: "95% of builds should complete within 5 minutes"
     sli:
-      raw:
-        error_ratio_query: |
-          (
-            sum(rate(cicd_build_duration_bucket{le="+Inf"}[5m]))
-            -
-            sum(rate(cicd_build_duration_bucket{le="300"}[5m]))
-          )
-          /
-          sum(rate(cicd_build_duration_bucket{le="+Inf"}[5m]))
+      events:
+        error_query: |
+          sum(rate(cicd_build_duration_seconds_bucket{le="+Inf"}[5m]))
+          -
+          sum(rate(cicd_build_duration_seconds_bucket{le="300"}[5m]))
+        total_query: |
+          sum(rate(cicd_build_duration_seconds_bucket{le="+Inf"}[5m]))
     alerting:
       name: BuildLatency
-      page_alert:
-        labels:
-          severity: warning
+      labels:
+        category: latency
+        component: build
 
-  # 4️⃣ Test Success Rate
+  # 4. Test Availability
   - name: test-availability
     objective: 99
-    description: Tests should pass 99% of the time
+    description: "Tests should pass 99% of the time"
     sli:
       events:
         error_query: |
@@ -73,14 +69,14 @@ slos:
           sum(rate(cicd_test_status[5m]))
     alerting:
       name: TestAvailability
-      ticket_alert:
-        labels:
-          severity: warning
+      labels:
+        category: quality
+        component: testing
 
-  # 5️⃣ Security Scan Completion
+  # 5. Security Scan Availability
   - name: security-scan-availability
     objective: 99.9
-    description: Security scans should succeed
+    description: "Security scans should complete successfully 99.9% of the time"
     sli:
       events:
         error_query: |
@@ -89,14 +85,14 @@ slos:
           sum(rate(cicd_security_scan_status[5m]))
     alerting:
       name: SecurityScanAvailability
-      page_alert:
-        labels:
-          severity: critical
+      labels:
+        category: security
+        component: scanning
 
-  # 6️⃣ Zero Critical Vulnerabilities
-  - name: critical-vulnerabilities
+  # 6. Critical Vulnerabilities (ZERO tolerance)
+  - name: critical-vulnerability-rate
     objective: 100
-    description: No builds with critical vulnerabilities
+    description: "No builds should contain critical vulnerabilities"
     sli:
       events:
         error_query: |
@@ -105,14 +101,14 @@ slos:
           sum(rate(cicd_build_status[5m]))
     alerting:
       name: CriticalVulnerabilities
-      page_alert:
-        labels:
-          severity: critical
+      labels:
+        category: security
+        component: vulnerability
 
-  # 7️⃣ Rollback Rate
+  # 7. Rollback Rate
   - name: rollback-rate
     objective: 98
-    description: Less than 2% deployments rollback
+    description: "Less than 2% of deployments should require rollback"
     sli:
       events:
         error_query: |
@@ -120,7 +116,23 @@ slos:
         total_query: |
           sum(rate(cicd_deployment_status[5m]))
     alerting:
-      name: RollbackRate
-      ticket_alert:
-        labels:
-          severity: warning
+      name: HighRollbackRate
+      labels:
+        category: stability
+        component: deployment
+
+  # 8. ArgoCD Sync Availability
+  - name: argocd-sync-availability
+    objective: 99.9
+    description: "ArgoCD syncs should succeed 99.9% of the time"
+    sli:
+      events:
+        error_query: |
+          sum(rate(argocd_app_sync_status{phase="Failed"}[5m]))
+        total_query: |
+          sum(rate(argocd_app_sync_status[5m]))
+    alerting:
+      name: ArgoCDSyncAvailability
+      labels:
+        category: gitops
+        component: argocd
