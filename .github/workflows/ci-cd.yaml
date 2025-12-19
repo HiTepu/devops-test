@@ -22,6 +22,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
       
       - name: Set image tag
         id: image-tag
@@ -68,78 +71,8 @@ jobs:
           
           echo "✅ Images pushed successfully!"
       
-      name: CI/CD Pipeline
-
-on:
-  push:
-    branches: [ main, develop ]
-  workflow_dispatch:
-
-permissions:
-  contents: write
-
-env:
-  HARBOR_URL: harbor.lmsx.io.vn
-  HARBOR_PROJECT: demo
-  IMAGE_NAME: nginx
-
-jobs:
-  build-and-push:
-    runs-on: ubuntu-latest
-    outputs:
-      image-tag: ${{ steps.image-tag.outputs.tag }}
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Set image tag
-        id: image-tag
+      - name: Update Kubernetes manifests
         run: |
-          TAG="${{ github.sha }}"
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "Image tag: $TAG"
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      
-      - name: Login to Harbor
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.HARBOR_URL }}
-          username: ${{ secrets.HARBOR_USERNAME }}
-          password: ${{ secrets.HARBOR_PASSWORD }}
-      
-      - name: Install skopeo
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y skopeo
-      
-      - name: Build image
-        run: |
-          docker build -t local-image:latest .
-      
-      - name: Push with skopeo
-        env:
-          HARBOR_USER: ${{ secrets.HARBOR_USERNAME }}
-          HARBOR_PASS: ${{ secrets.HARBOR_PASSWORD }}
-        run: |
-          echo "Pushing images..."
-          
-          skopeo copy \
-            --dest-creds="${HARBOR_USER}:${HARBOR_PASS}" \
-            docker-daemon:local-image:latest \
-            docker://${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ steps.image-tag.outputs.tag }}
-          
-          skopeo copy \
-            --dest-creds="${HARBOR_USER}:${HARBOR_PASS}" \
-            docker-daemon:local-image:latest \
-            docker://${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:latest
-          
-          echo "✅ Images pushed successfully!"
-      
-       - name: Update Kubernetes manifests
-         run: |
           IMAGE_TAG="${{ steps.image-tag.outputs.tag }}"
           IMAGE_FULL="${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}"
           
