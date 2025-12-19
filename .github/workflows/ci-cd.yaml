@@ -14,8 +14,8 @@ env:
   HARBOR_URL: harbor.lmsx.io.vn
   HARBOR_PROJECT: demo
   IMAGE_NAME: nginx
-  PROMETHEUS_PUSHGATEWAY: http://prometheus-pushgateway.monitoring.svc.cluster.local:9091
-  GRAFANA_URL: http://grafana.monitoring.svc.cluster.local:3000
+  PROMETHEUS_PUSHGATEWAY: prometheus.lmsx.io.vn
+  GRAFANA_URL: grafana.lmsx.io.vn
 
 jobs:
   # Job 1: Testing
