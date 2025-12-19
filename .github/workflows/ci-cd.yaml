@@ -68,10 +68,114 @@ jobs:
           
           echo "✅ Images pushed successfully!"
       
+      name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  HARBOR_URL: harbor.lmsx.io.vn
+  HARBOR_PROJECT: demo
+  IMAGE_NAME: nginx
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.image-tag.outputs.tag }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set image tag
+        id: image-tag
+        run: |
+          TAG="${{ github.sha }}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Image tag: $TAG"
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Login to Harbor
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.HARBOR_URL }}
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+      
+      - name: Install skopeo
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y skopeo
+      
+      - name: Build image
+        run: |
+          docker build -t local-image:latest .
+      
+      - name: Push with skopeo
+        env:
+          HARBOR_USER: ${{ secrets.HARBOR_USERNAME }}
+          HARBOR_PASS: ${{ secrets.HARBOR_PASSWORD }}
+        run: |
+          echo "Pushing images..."
+          
+          skopeo copy \
+            --dest-creds="${HARBOR_USER}:${HARBOR_PASS}" \
+            docker-daemon:local-image:latest \
+            docker://${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ steps.image-tag.outputs.tag }}
+          
+          skopeo copy \
+            --dest-creds="${HARBOR_USER}:${HARBOR_PASS}" \
+            docker-daemon:local-image:latest \
+            docker://${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:latest
+          
+          echo "✅ Images pushed successfully!"
+      
+       - name: Update Kubernetes manifests
+         run: |
+          IMAGE_TAG="${{ steps.image-tag.outputs.tag }}"
+          IMAGE_FULL="${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}"
+          
+          echo "Updating deployment.yaml with image: $IMAGE_FULL"
+          
+          # Update image in deployment.yaml
+          sed -i "s|image: harbor.lmsx.io.vn/demo/nginx:.*|image: $IMAGE_FULL|g" k8s-manifests/demo/deployment.yaml
+          
+          echo "✅ Updated deployment.yaml:"
+          grep "image:" k8s-manifests/demo/deployment.yaml
+      
+      - name: Commit and push manifest changes
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Add only the deployment file
+          git add k8s-manifests/demo/deployment.yaml
+          
+          # Check if there are changes
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "🚀 Update image to ${{ steps.image-tag.outputs.tag }} [skip ci]"
+            git push
+            echo "✅ Manifests updated and pushed to repository"
+          fi
+      
       - name: Verify images
         run: |
           echo "### 🐳 Pushed Images" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ steps.image-tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:latest\`" >> $GITHUB_STEP_SUMMARY
-
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📝 Manifest Update" >> $GITHUB_STEP_SUMMARY
+          echo "Updated \`k8s-manifests/demo/deployment.yaml\` with new image tag" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "ArgoCD will automatically sync the changes within 3 minutes" >> $GITHUB_STEP_SUMMARY
