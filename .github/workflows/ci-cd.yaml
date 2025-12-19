@@ -528,12 +528,12 @@ jobs:
             git rebase origin/main || git rebase --abort
             
             if git push origin HEAD:main; then
-            echo "✅ Manifests updated and pushed to repository"
-            exit 0
-          fi
+              echo "✅ Manifests updated and pushed to repository"
+              exit 0
+            fi
                 
-          echo "⚠️ Push failed, retrying..."
-          sleep 3
+            echo "⚠️ Push failed, retrying..."
+            sleep 3
         done
         
         echo "❌ Failed to push after 3 attempts"
