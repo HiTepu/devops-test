@@ -6,265 +6,121 @@ labels:
   owner: "sre-team"
 
 slos:
-  # SLO 1: Deployment Success Rate
-  - name: "deployment-availability"
+  # 1️⃣ Deployment Success Rate
+  - name: deployment-availability
     objective: 99.9
-    description: "Deployments should succeed 99.9% of the time"
+    description: Deployments should succeed 99.9% of the time
     sli:
       events:
         error_query: |
-          sum(rate(cicd_deployment_status{status="0"}[{{.window}}]))
+          sum(rate(cicd_deployment_status{status="0"}[5m]))
         total_query: |
-          sum(rate(cicd_deployment_status[{{.window}}]))
+          sum(rate(cicd_deployment_status[5m]))
     alerting:
       name: DeploymentAvailability
-      labels:
-        category: "availability"
-        component: "deployment"
-      annotations:
-        summary: "Deployment availability is below SLO"
-        description: "Deployment success rate is {{ $value | humanizePercentage }} (SLO: 99.9%)"
-        runbook: "https://wiki.example.com/runbooks/deployment-failures"
-        dashboard: "http://grafana.monitoring.svc.cluster.local:3000/d/cicd-pipeline"
       page_alert:
         labels:
-          severity: "critical"
-          priority: "P1"
+          severity: critical
       ticket_alert:
         labels:
-          severity: "warning"
-          priority: "P2"
+          severity: warning
 
-  # SLO 2: Build Success Rate
-  - name: "build-availability"
+  # 2️⃣ Build Success Rate
+  - name: build-availability
     objective: 99.5
-    description: "Builds should succeed 99.5% of the time"
+    description: Builds should succeed 99.5% of the time
     sli:
       events:
         error_query: |
-          sum(rate(cicd_build_status{status="0"}[{{.window}}]))
+          sum(rate(cicd_build_status{status="0"}[5m]))
         total_query: |
-          sum(rate(cicd_build_status[{{.window}}]))
+          sum(rate(cicd_build_status[5m]))
     alerting:
       name: BuildAvailability
-      labels:
-        category: "availability"
-        component: "build"
-      annotations:
-        summary: "Build availability is below SLO"
-        description: "Build success rate is {{ $value | humanizePercentage }} (SLO: 99.5%)"
-        runbook: "https://wiki.example.com/runbooks/build-failures"
       page_alert:
         labels:
-          severity: "critical"
-      ticket_alert:
-        labels:
-          severity: "warning"
+          severity: critical
 
-  # SLO 3: Build Duration (Latency)
-  - name: "build-latency"
+  # 3️⃣ Build Latency (P95 < 5m)
+  - name: build-latency
     objective: 95
-    description: "95% of builds should complete within 5 minutes"
+    description: 95% of builds complete under 5 minutes
     sli:
-      events:
-        error_query: |
-          sum(rate(cicd_build_duration_seconds{duration=">300"}[{{.window}}]))
-        total_query: |
-          sum(rate(cicd_build_duration_seconds[{{.window}}]))
+      raw:
+        error_ratio_query: |
+          (
+            sum(rate(cicd_build_duration_bucket{le="+Inf"}[5m]))
+            -
+            sum(rate(cicd_build_duration_bucket{le="300"}[5m]))
+          )
+          /
+          sum(rate(cicd_build_duration_bucket{le="+Inf"}[5m]))
     alerting:
       name: BuildLatency
-      labels:
-        category: "latency"
-        component: "build"
-      annotations:
-        summary: "Build latency is above SLO threshold"
-        description: "{{ $value | humanizePercentage }} of builds exceed 5 minutes (SLO: 95% under 5min)"
-        runbook: "https://wiki.example.com/runbooks/slow-builds"
       page_alert:
         labels:
-          severity: "warning"
-      ticket_alert:
-        labels:
-          severity: "info"
+          severity: warning
 
-  # SLO 4: Test Success Rate
-  - name: "test-availability"
-    objective: 99.0
-    description: "Tests should pass 99% of the time"
+  # 4️⃣ Test Success Rate
+  - name: test-availability
+    objective: 99
+    description: Tests should pass 99% of the time
     sli:
       events:
         error_query: |
-          sum(rate(cicd_test_status{status="0"}[{{.window}}]))
+          sum(rate(cicd_test_status{status="0"}[5m]))
         total_query: |
-          sum(rate(cicd_test_status[{{.window}}]))
+          sum(rate(cicd_test_status[5m]))
     alerting:
       name: TestAvailability
-      labels:
-        category: "quality"
-        component: "testing"
-      annotations:
-        summary: "Test pass rate is below SLO"
-        description: "Test success rate is {{ $value | humanizePercentage }} (SLO: 99%)"
-        runbook: "https://wiki.example.com/runbooks/test-failures"
-      page_alert:
-        labels:
-          severity: "warning"
       ticket_alert:
         labels:
-          severity: "info"
+          severity: warning
 
-  # SLO 5: Security Scan Completion
-  - name: "security-scan-availability"
+  # 5️⃣ Security Scan Completion
+  - name: security-scan-availability
     objective: 99.9
-    description: "Security scans should complete successfully 99.9% of the time"
+    description: Security scans should succeed
     sli:
       events:
         error_query: |
-          sum(rate(cicd_security_scan_status{status="0"}[{{.window}}]))
+          sum(rate(cicd_security_scan_status{status="0"}[5m]))
         total_query: |
-          sum(rate(cicd_security_scan_status[{{.window}}]))
+          sum(rate(cicd_security_scan_status[5m]))
     alerting:
       name: SecurityScanAvailability
-      labels:
-        category: "security"
-        component: "scanning"
-      annotations:
-        summary: "Security scan completion rate is below SLO"
-        description: "Security scan success rate is {{ $value | humanizePercentage }} (SLO: 99.9%)"
-        runbook: "https://wiki.example.com/runbooks/security-scan-failures"
       page_alert:
         labels:
-          severity: "critical"
-      ticket_alert:
-        labels:
-          severity: "warning"
+          severity: critical
 
-  # SLO 6: Zero Critical Vulnerabilities
-  - name: "critical-vulnerability-rate"
+  # 6️⃣ Zero Critical Vulnerabilities
+  - name: critical-vulnerabilities
     objective: 100
-    description: "No deployments should have critical vulnerabilities"
+    description: No builds with critical vulnerabilities
     sli:
       events:
         error_query: |
-          sum(rate(cicd_vulnerabilities_total{severity="critical"}[{{.window}}]) > 0)
+          sum(rate(cicd_vulnerabilities_total{severity="critical"}[5m]))
         total_query: |
-          sum(rate(cicd_build_status[{{.window}}]))
+          sum(rate(cicd_build_status[5m]))
     alerting:
       name: CriticalVulnerabilities
-      labels:
-        category: "security"
-        component: "vulnerability"
-      annotations:
-        summary: "Critical vulnerabilities detected in builds"
-        description: "Builds with critical vulnerabilities: {{ $value | humanizePercentage }} (SLO: 0%)"
-        runbook: "https://wiki.example.com/runbooks/critical-vulnerabilities"
       page_alert:
         labels:
-          severity: "critical"
-          priority: "P0"
-      ticket_alert:
-        labels:
-          severity: "critical"
-          priority: "P1"
+          severity: critical
 
-  # SLO 7: Rollback Rate
-  - name: "rollback-rate"
+  # 7️⃣ Rollback Rate
+  - name: rollback-rate
     objective: 98
-    description: "Less than 2% of deployments should require rollback"
+    description: Less than 2% deployments rollback
     sli:
       events:
         error_query: |
-          sum(rate(cicd_rollback_total[{{.window}}]))
+          sum(rate(cicd_rollback_total[5m]))
         total_query: |
-          sum(rate(cicd_deployment_status[{{.window}}]))
+          sum(rate(cicd_deployment_status[5m]))
     alerting:
-      name: HighRollbackRate
-      labels:
-        category: "stability"
-        component: "deployment"
-      annotations:
-        summary: "Rollback rate is above acceptable threshold"
-        description: "Rollback rate is {{ $value | humanizePercentage }} (Target: <2%)"
-        runbook: "https://wiki.example.com/runbooks/frequent-rollbacks"
-      page_alert:
-        labels:
-          severity: "warning"
+      name: RollbackRate
       ticket_alert:
         labels:
-          severity: "info"
-
-  # SLO 8: ArgoCD Sync Success
-  - name: "argocd-sync-availability"
-    objective: 99.9
-    description: "ArgoCD syncs should succeed 99.9% of the time"
-    sli:
-      events:
-        error_query: |
-          sum(rate(argocd_app_sync_status{phase="Failed"}[{{.window}}]))
-        total_query: |
-          sum(rate(argocd_app_sync_status[{{.window}}]))
-    alerting:
-      name: ArgoCDSyncAvailability
-      labels:
-        category: "gitops"
-        component: "argocd"
-      annotations:
-        summary: "ArgoCD sync success rate is below SLO"
-        description: "ArgoCD sync success rate is {{ $value | humanizePercentage }} (SLO: 99.9%)"
-        runbook: "https://wiki.example.com/runbooks/argocd-sync-failures"
-      page_alert:
-        labels:
-          severity: "critical"
-      ticket_alert:
-        labels:
-          severity: "warning"
-
----
-# Multi-window SLO for long-term tracking
-version: "prometheus/v1"
-service: "cicd-pipeline-longterm"
-labels:
-  team: "devops"
-  tier: "platform"
-
-slos:
-  # Monthly SLO tracking
-  - name: "deployment-availability-monthly"
-    objective: 99.9
-    description: "Monthly deployment success rate SLO"
-    sli:
-      events:
-        error_query: |
-          sum(rate(cicd_deployment_status{status="0"}[30d]))
-        total_query: |
-          sum(rate(cicd_deployment_status[30d]))
-    alerting:
-      name: MonthlyDeploymentSLO
-      labels:
-        category: "monthly-slo"
-      annotations:
-        summary: "Monthly deployment SLO at risk"
-        description: "Monthly error budget: {{ $value }}%"
-      page_alert:
-        labels:
-          severity: "warning"
-
-  # Quarterly performance tracking
-  - name: "build-performance-quarterly"
-    objective: 95
-    description: "Quarterly build latency SLO"
-    sli:
-      events:
-        error_query: |
-          sum(rate(cicd_build_duration_seconds{duration=">300"}[90d]))
-        total_query: |
-          sum(rate(cicd_build_duration_seconds[90d]))
-    alerting:
-      name: QuarterlyBuildPerformance
-      labels:
-        category: "quarterly-slo"
-      annotations:
-        summary: "Quarterly build performance SLO at risk"
-      page_alert:
-        labels:
-          severity: "info"
+          severity: warning
