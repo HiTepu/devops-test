@@ -536,8 +536,8 @@ jobs:
             sleep 3
           done
         
-        echo "❌ Failed to push after 3 attempts"
-        exit 1
+          echo "❌ Failed to push after 3 attempts"
+          exit 1
 
       - name: Create deployment summary
         run: |
