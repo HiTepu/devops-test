@@ -1,0 +1,11 @@
+{
+  "timestamp": "2025-12-19T08:45:08Z",
+  "previous_tag": "917113717efd61404f0c8275279e6638a5f60775",
+  "previous_image": "harbor.lmsx.io.vn/demo/nginx:917113717efd61404f0c8275279e6638a5f60775",
+  "git_commit": "6c2b39a15c52b027a3bab6459a1ba8456ffbf9c8",
+  "git_branch": "main",
+  "workflow_run_id": "20364668996",
+  "workflow_run_number": "52",
+  "actor": "HiTepu",
+  "error_budget_remaining": "100%"
+}
