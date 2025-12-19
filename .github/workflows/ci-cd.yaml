@@ -256,7 +256,6 @@ jobs:
           echo "#### 📊 Monitoring" >> $GITHUB_STEP_SUMMARY
           echo "- [View in Grafana](${GRAFANA_URL}/d/cicd-pipeline)" >> $GITHUB_STEP_SUMMARY
           echo "- [View Prometheus Metrics](${PROMETHEUS_PUSHGATEWAY})" >> $GITHUB_STEP_SUMMARY
-
   # Job 4: Generate SLO Metrics với Sloth
   slo-metrics:
     runs-on: ubuntu-latest
@@ -264,29 +263,37 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
-      - name: Install Sloth
+    
+      - name: Install Sloth v0.15.0
         run: |
-          wget https://github.com/slok/sloth/releases/download/v0.11.0/sloth-linux-amd64
+          VERSION="0.15.0"
+          echo "📦 Installing Sloth v${VERSION}..."
+          wget https://github.com/slok/sloth/releases/download/v${VERSION}/sloth-linux-amd64
           chmod +x sloth-linux-amd64
           sudo mv sloth-linux-amd64 /usr/local/bin/sloth
-      
+        
+          echo "✅ Sloth installed:"
+          sloth version
+    
       - name: Create SLO specification
         run: |
-          cat > slo-spec.yaml <<EOF
+          cat > slo-spec.yaml <<'EOF'
           version: "prometheus/v1"
-          service: "${IMAGE_NAME}"
+          service: "nginx"
           labels:
             team: "devops"
             tier: "1"
+        
           slos:
             - name: "deployment-success-rate"
               objective: 99.9
               description: "Deployment success rate should be above 99.9%"
               sli:
-                events:
-                  error_query: sum(rate(cicd_build_status{image="${IMAGE_NAME}",status="0"}[5m]))
-                  total_query: sum(rate(cicd_build_status{image="${IMAGE_NAME}"}[5m]))
+                raw:
+                  error_ratio_query: |
+                    sum(rate(cicd_build_status{image="nginx",status="0"}[{{.window}}]))
+                    /
+                    sum(rate(cicd_build_status{image="nginx"}[{{.window}}]))
               alerting:
                 name: DeploymentSuccessRate
                 labels:
@@ -299,31 +306,55 @@ jobs:
                 ticket_alert:
                   labels:
                     severity: "warning"
+          
             - name: "build-duration"
               objective: 95
               description: "95% of builds should complete within 5 minutes"
               sli:
-                events:
-                  error_query: sum(rate(cicd_build_duration_seconds{image="${IMAGE_NAME}"}[5m]) > 300)
-                  total_query: sum(rate(cicd_build_duration_seconds{image="${IMAGE_NAME}"}[5m]))
+                raw:
+                  error_ratio_query: |
+                    (
+                      sum(rate(cicd_build_duration_seconds{image="nginx"}[{{.window}}]) > 300)
+                    )
+                    /
+                    sum(rate(cicd_build_duration_seconds{image="nginx"}[{{.window}}]) > 0)
               alerting:
                 name: BuildDuration
                 labels:
                   category: "performance"
+                page_alert:
+                  labels:
+                    severity: "warning"
           EOF
-      
+    
       - name: Generate Prometheus rules
         run: |
           sloth generate -i slo-spec.yaml -o prometheus-slo-rules.yaml
-          echo "✅ Generated SLO rules"
-          cat prometheus-slo-rules.yaml
-      
+         
+          echo "=== Generated SLO rules ==="
+          echo "Recording rules: $(grep -c '  - record:' prometheus-slo-rules.yaml || echo 0)"
+          echo "Alert rules: $(grep -c '  - alert:' prometheus-slo-rules.yaml || echo 0)"
+        
+          echo ""
+          echo "=== First 50 lines of generated rules ==="
+          head -50 prometheus-slo-rules.yaml
+     
+      - name: Upload SLO rules artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: prometheus-slo-rules
+          path: prometheus-slo-rules.yaml
+          retention-days: 30
+    
       - name: Push SLO generation metrics
         run: |
           cat <<EOF | curl --data-binary @- ${PROMETHEUS_PUSHGATEWAY}/metrics/job/cicd_slo/instance/${GITHUB_RUN_ID}
           # HELP cicd_slo_generated SLO rules generation status
           # TYPE cicd_slo_generated gauge
           cicd_slo_generated{service="${IMAGE_NAME}"} 1
+          # HELP cicd_slo_generation_timestamp_seconds SLO generation timestamp
+          # TYPE cicd_slo_generation_timestamp_seconds gauge
+          cicd_slo_generation_timestamp_seconds{service="${IMAGE_NAME}"} $(date +%s)
           EOF
 
   # Job 5: Post-deployment verification
