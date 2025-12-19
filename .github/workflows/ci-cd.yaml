@@ -517,12 +517,28 @@ jobs:
           
           if git diff --staged --quiet; then
             echo "No changes to commit"
-          else
-            git commit -m "🚀 Update image to ${{ steps.image-tag.outputs.tag }} [skip ci]"
-            git push
-            echo "✅ Manifests updated and pushed to repository"
+            exit 0
           fi
-      
+
+          git commit -m "🚀 Update image to ${{ steps.image-tag.outputs.tag }} [skip ci]"
+          
+          for i in 1 2 3; do 
+            echo "Push attempt $i..."
+            git fetch origin main
+            git rebase origin/main || git rebase --abort
+            
+            if git push origin HEAD:main; then
+            echo "✅ Manifests updated and pushed to repository"
+            exit 0
+          fi
+                
+          echo "⚠️ Push failed, retrying..."
+          sleep 3
+        done
+        
+        echo "❌ Failed to push after 3 attempts"
+        exit 1
+
       - name: Create deployment summary
         run: |
           echo "### 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
