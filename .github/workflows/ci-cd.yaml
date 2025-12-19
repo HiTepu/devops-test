@@ -4,6 +4,17 @@ on:
   push:
     branches: [ main, develop ]
   workflow_dispatch:
+    inputs:
+      skip_error_budget_check:
+        description: 'Skip error budget check (emergency only)'
+        required: false
+        type: boolean
+        default: false
+      backup_retention_days:
+        description: 'Backup retention days'
+        required: false
+        type: number
+        default: 30
 
 permissions:
   contents: write
@@ -15,12 +26,130 @@ env:
   HARBOR_PROJECT: demo
   IMAGE_NAME: nginx
   PROMETHEUS_PUSHGATEWAY: prometheus.lmsx.io.vn
+  PROMETHEUS_URL: prometheus.lmsx.io.vn
   GRAFANA_URL: grafana.lmsx.io.vn
+  # Error Budget Configuration
+  ERROR_BUDGET_THRESHOLD: 10  # Block deployment if error budget < 10%
+  ERROR_BUDGET_WINDOW: 30d    # 30 days window
+  # Backup Configuration
+  BACKUP_RETENTION_DAYS: ${{ github.event.inputs.backup_retention_days || 30 }}
+  MAX_BACKUPS_LOCAL: 50       # Maximum local backups to keep
 
 jobs:
-  # Job 1: Testing
+  # Job 1: Error Budget Check (CRITICAL - BLOCKS DEPLOYMENT)
+  check-error-budget:
+    runs-on: ubuntu-latest
+    outputs:
+      error_budget_remaining: ${{ steps.check.outputs.error_budget }}
+      can_deploy: ${{ steps.check.outputs.can_deploy }}
+      
+    steps:
+      - name: Query Error Budget from Prometheus
+        id: query
+        run: |
+          echo "🔍 Checking error budget..."
+          
+          # Query for deployment failures in the last 30 days
+          QUERY='(1 - (sum(rate(cicd_deployment_status{status="0",image="'${IMAGE_NAME}'"}['${ERROR_BUDGET_WINDOW}'])) / sum(rate(cicd_deployment_status{image="'${IMAGE_NAME}'"}['${ERROR_BUDGET_WINDOW}'])))) * 100'
+          
+          # Encode query for URL
+          ENCODED_QUERY=$(echo "$QUERY" | jq -sRr @uri)
+          
+          # Query Prometheus
+          RESPONSE=$(curl -s "${PROMETHEUS_URL}/api/v1/query?query=${ENCODED_QUERY}")
+          
+          echo "Response: $RESPONSE"
+          
+          # Parse result
+          ERROR_BUDGET=$(echo "$RESPONSE" | jq -r '.data.result[0].value[1] // "100"')
+          
+          echo "error_budget=$ERROR_BUDGET" >> $GITHUB_OUTPUT
+          echo "📊 Current Error Budget: ${ERROR_BUDGET}%"
+      
+      - name: Evaluate Error Budget
+        id: check
+        run: |
+          ERROR_BUDGET="${{ steps.query.outputs.error_budget }}"
+          THRESHOLD="${ERROR_BUDGET_THRESHOLD}"
+          SKIP_CHECK="${{ github.event.inputs.skip_error_budget_check }}"
+          
+          echo "Error Budget: ${ERROR_BUDGET}%"
+          echo "Threshold: ${THRESHOLD}%"
+          echo "Skip Check: ${SKIP_CHECK}"
+          
+          # Convert to integer for comparison
+          ERROR_BUDGET_INT=${ERROR_BUDGET%.*}
+          
+          if [ "$SKIP_CHECK" = "true" ]; then
+            echo "⚠️ ERROR BUDGET CHECK SKIPPED (Emergency deployment)"
+            echo "can_deploy=true" >> $GITHUB_OUTPUT
+            echo "error_budget=$ERROR_BUDGET" >> $GITHUB_OUTPUT
+            
+            # Send alert metric
+            cat <<EOF | curl --data-binary @- ${PROMETHEUS_PUSHGATEWAY}/metrics/job/cicd_emergency/instance/${GITHUB_RUN_ID}
+          # HELP cicd_error_budget_check_skipped Error budget check was skipped
+          # TYPE cicd_error_budget_check_skipped gauge
+          cicd_error_budget_check_skipped{image="${IMAGE_NAME}",branch="${GITHUB_REF_NAME}"} 1
+          EOF
+            exit 0
+          fi
+          
+          if (( $(echo "$ERROR_BUDGET_INT < $THRESHOLD" | bc -l) )); then
+            echo "❌ DEPLOYMENT BLOCKED!"
+            echo "Error budget (${ERROR_BUDGET}%) is below threshold (${THRESHOLD}%)"
+            echo ""
+            echo "### ❌ Deployment Blocked - Error Budget Exhausted" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Current Error Budget:** ${ERROR_BUDGET}%" >> $GITHUB_STEP_SUMMARY
+            echo "**Threshold:** ${THRESHOLD}%" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "#### 🚨 Actions Required:" >> $GITHUB_STEP_SUMMARY
+            echo "1. Investigate recent deployment failures" >> $GITHUB_STEP_SUMMARY
+            echo "2. Fix underlying issues before deploying" >> $GITHUB_STEP_SUMMARY
+            echo "3. Monitor [Grafana Dashboard](${GRAFANA_URL}/d/cicd-pipeline)" >> $GITHUB_STEP_SUMMARY
+            echo "4. If emergency deployment needed, re-run with 'skip_error_budget_check' option" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "#### 📊 Error Budget Policy:" >> $GITHUB_STEP_SUMMARY
+            echo "- Deployments are blocked when error budget < ${THRESHOLD}%" >> $GITHUB_STEP_SUMMARY
+            echo "- Focus on stability and bug fixes" >> $GITHUB_STEP_SUMMARY
+            echo "- Review [runbook](https://wiki.example.com/error-budget-exhausted)" >> $GITHUB_STEP_SUMMARY
+            
+            echo "can_deploy=false" >> $GITHUB_OUTPUT
+            echo "error_budget=$ERROR_BUDGET" >> $GITHUB_OUTPUT
+            
+            # Push blocked deployment metric
+            cat <<EOF | curl --data-binary @- ${PROMETHEUS_PUSHGATEWAY}/metrics/job/cicd_blocked/instance/${GITHUB_RUN_ID}
+          # HELP cicd_deployment_blocked Deployment blocked due to error budget
+          # TYPE cicd_deployment_blocked gauge
+          cicd_deployment_blocked{image="${IMAGE_NAME}",reason="error_budget",threshold="${THRESHOLD}"} 1
+          # HELP cicd_error_budget_remaining Error budget remaining percentage
+          # TYPE cicd_error_budget_remaining gauge
+          cicd_error_budget_remaining{image="${IMAGE_NAME}"} ${ERROR_BUDGET}
+          EOF
+            
+            exit 1
+          else
+            echo "✅ Error budget check passed (${ERROR_BUDGET}% remaining)"
+            echo "can_deploy=true" >> $GITHUB_OUTPUT
+            echo "error_budget=$ERROR_BUDGET" >> $GITHUB_OUTPUT
+            
+            # Push metric
+            cat <<EOF | curl --data-binary @- ${PROMETHEUS_PUSHGATEWAY}/metrics/job/cicd_error_budget/instance/${GITHUB_RUN_ID}
+          # HELP cicd_error_budget_remaining Error budget remaining percentage
+          # TYPE cicd_error_budget_remaining gauge
+          cicd_error_budget_remaining{image="${IMAGE_NAME}"} ${ERROR_BUDGET}
+          # HELP cicd_error_budget_check_passed Error budget check passed
+          # TYPE cicd_error_budget_check_passed gauge
+          cicd_error_budget_check_passed{image="${IMAGE_NAME}"} 1
+          EOF
+          fi
+
+  # Job 2: Testing
   test:
     runs-on: ubuntu-latest
+    needs: check-error-budget
+    if: needs.check-error-budget.outputs.can_deploy == 'true'
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -28,7 +157,6 @@ jobs:
       - name: Run unit tests
         run: |
           echo "Running unit tests..."
-          # Thêm lệnh test của bạn ở đây
           # npm test hoặc pytest, go test, etc.
           
       - name: Run integration tests
@@ -48,10 +176,11 @@ jobs:
           cicd_test_duration_seconds{job="unit_tests"} $(echo $SECONDS)
           EOF
 
-  # Job 2: Security Scanning với Trivy
+  # Job 3: Security Scanning với Trivy
   security-scan:
     runs-on: ubuntu-latest
     needs: test
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -104,13 +233,155 @@ jobs:
             exit 1
           fi
 
-  # Job 3: Build and Push
+  # Job 4: Advanced Backup Strategy
+  backup-strategy:
+    runs-on: ubuntu-latest
+    needs: [check-error-budget, test, security-scan]
+    outputs:
+      previous-tag: ${{ steps.backup.outputs.previous_tag }}
+      backup-file: ${{ steps.backup.outputs.backup_file }}
+      backup-count: ${{ steps.backup.outputs.backup_count }}
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Create comprehensive backup
+        id: backup
+        run: |
+          echo "📦 Creating comprehensive backup..."
+          
+          # Get current deployment info
+          CURRENT_IMAGE=$(grep "image:" k8s-manifests/demo/deployment.yaml | head -1 | awk '{print $2}')
+          PREVIOUS_TAG=$(echo $CURRENT_IMAGE | cut -d: -f2)
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          
+          # Create backup directory structure
+          mkdir -p backups/{deployments,configs,metadata}
+          
+          # 1. Backup deployment manifest
+          BACKUP_FILE="backups/deployments/deployment-${TIMESTAMP}-${PREVIOUS_TAG}.yaml"
+          cp k8s-manifests/demo/deployment.yaml "$BACKUP_FILE"
+          
+          # 2. Backup all k8s manifests
+          if [ -d "k8s-manifests" ]; then
+            tar -czf "backups/configs/k8s-manifests-${TIMESTAMP}.tar.gz" k8s-manifests/
+          fi
+          
+          # 3. Create metadata file
+          cat > "backups/metadata/backup-${TIMESTAMP}.json" <<EOF
+          {
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "previous_tag": "${PREVIOUS_TAG}",
+            "previous_image": "${CURRENT_IMAGE}",
+            "git_commit": "${GITHUB_SHA}",
+            "git_branch": "${GITHUB_REF_NAME}",
+            "workflow_run_id": "${GITHUB_RUN_ID}",
+            "workflow_run_number": "${GITHUB_RUN_NUMBER}",
+            "actor": "${GITHUB_ACTOR}",
+            "error_budget_remaining": "${{ needs.check-error-budget.outputs.error_budget_remaining }}%"
+          }
+          EOF
+          
+          # 4. Create rollback script for this specific backup
+          cat > "backups/rollback-${TIMESTAMP}.sh" <<'ROLLBACK_SCRIPT'
+          #!/bin/bash
+          # Auto-generated rollback script
+          BACKUP_TAG="PREVIOUS_TAG_PLACEHOLDER"
+          BACKUP_FILE="BACKUP_FILE_PLACEHOLDER"
+          
+          echo "🔄 Rolling back to version: $BACKUP_TAG"
+          
+          if [ -f "$BACKUP_FILE" ]; then
+            cp "$BACKUP_FILE" k8s-manifests/demo/deployment.yaml
+            git add k8s-manifests/demo/deployment.yaml
+            git commit -m "⏮️ Rollback to $BACKUP_TAG [skip ci]"
+            git push
+            echo "✅ Rollback completed"
+          else
+            echo "❌ Backup file not found: $BACKUP_FILE"
+            exit 1
+          fi
+          ROLLBACK_SCRIPT
+          
+          # Replace placeholders
+          sed -i "s|PREVIOUS_TAG_PLACEHOLDER|${PREVIOUS_TAG}|g" "backups/rollback-${TIMESTAMP}.sh"
+          sed -i "s|BACKUP_FILE_PLACEHOLDER|${BACKUP_FILE}|g" "backups/rollback-${TIMESTAMP}.sh"
+          
+          chmod +x "backups/rollback-${TIMESTAMP}.sh"
+          
+          # 5. Count backups
+          BACKUP_COUNT=$(ls -1 backups/deployments/ 2>/dev/null | wc -l)
+          
+          # 6. Cleanup old backups if exceeds max
+          if [ "$BACKUP_COUNT" -gt "$MAX_BACKUPS_LOCAL" ]; then
+            echo "🧹 Cleaning up old backups (keeping last ${MAX_BACKUPS_LOCAL})..."
+            cd backups/deployments
+            ls -t | tail -n +$((MAX_BACKUPS_LOCAL + 1)) | xargs rm -f
+            cd ../..
+          fi
+          
+          # Output variables
+          echo "previous_tag=$PREVIOUS_TAG" >> $GITHUB_OUTPUT
+          echo "backup_file=$BACKUP_FILE" >> $GITHUB_OUTPUT
+          echo "backup_count=$BACKUP_COUNT" >> $GITHUB_OUTPUT
+          
+          echo "✅ Backup completed:"
+          echo "  - Previous tag: $PREVIOUS_TAG"
+          echo "  - Backup file: $BACKUP_FILE"
+          echo "  - Total backups: $BACKUP_COUNT"
+          
+          # Show backup contents
+          echo ""
+          echo "📋 Backup structure:"
+          find backups/ -type f | head -20
+      
+      - name: Upload backup artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-backup-${{ github.sha }}
+          path: backups/
+          retention-days: ${{ env.BACKUP_RETENTION_DAYS }}
+      
+      - name: Commit backups to repository
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          git add backups/
+          
+          if ! git diff --staged --quiet; then
+            git commit -m "💾 Backup before deployment to ${{ github.sha }} [skip ci]"
+            git push
+            echo "✅ Backups committed to repository"
+          else
+            echo "ℹ️ No new backups to commit"
+          fi
+      
+      - name: Push backup metrics
+        run: |
+          cat <<EOF | curl --data-binary @- ${PROMETHEUS_PUSHGATEWAY}/metrics/job/cicd_backup/instance/${GITHUB_RUN_ID}
+          # HELP cicd_backup_created Backup creation status
+          # TYPE cicd_backup_created gauge
+          cicd_backup_created{image="${IMAGE_NAME}",previous_tag="${{ steps.backup.outputs.previous_tag }}"} 1
+          # HELP cicd_backup_count Total number of backups
+          # TYPE cicd_backup_count gauge
+          cicd_backup_count{image="${IMAGE_NAME}"} ${{ steps.backup.outputs.backup_count }}
+          # HELP cicd_backup_timestamp_seconds Backup creation timestamp
+          # TYPE cicd_backup_timestamp_seconds gauge
+          cicd_backup_timestamp_seconds{image="${IMAGE_NAME}"} $(date +%s)
+          EOF
+
+  # Job 5: Build and Push
   build-and-push:
     runs-on: ubuntu-latest
-    needs: [test, security-scan]
+    needs: [check-error-budget, backup-strategy]
     outputs:
       image-tag: ${{ steps.image-tag.outputs.tag }}
-      previous-tag: ${{ steps.backup.outputs.previous_tag }}
+      previous-tag: ${{ needs.backup-strategy.outputs.previous-tag }}
     
     steps:
       - name: Checkout code
@@ -119,21 +390,12 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
       
-      - name: Backup current deployment
-        id: backup
+      - name: Display error budget status
         run: |
-          # Lấy image tag hiện tại từ deployment
-          CURRENT_IMAGE=$(grep "image:" k8s-manifests/demo/deployment.yaml | head -1 | awk '{print $2}')
-          PREVIOUS_TAG=$(echo $CURRENT_IMAGE | cut -d: -f2)
-          echo "previous_tag=$PREVIOUS_TAG" >> $GITHUB_OUTPUT
-          
-          # Backup deployment file
-          mkdir -p backups
-          BACKUP_FILE="backups/deployment-$(date +%Y%m%d-%H%M%S)-${PREVIOUS_TAG}.yaml"
-          cp k8s-manifests/demo/deployment.yaml $BACKUP_FILE
-          
-          echo "✅ Backed up current deployment with tag: $PREVIOUS_TAG"
-          echo "Backup file: $BACKUP_FILE"
+          echo "### 📊 Error Budget Status" >> $GITHUB_STEP_SUMMARY
+          echo "**Remaining:** ${{ needs.check-error-budget.outputs.error_budget_remaining }}%" >> $GITHUB_STEP_SUMMARY
+          echo "**Threshold:** ${ERROR_BUDGET_THRESHOLD}%" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
       
       - name: Set image tag
         id: image-tag
@@ -202,7 +464,7 @@ jobs:
       - name: Update Kubernetes manifests
         run: |
           IMAGE_TAG="${{ steps.image-tag.outputs.tag }}"
-          IMAGE_FULL="${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}"
+          IMAGE_FULL="${{ env.HARBOR_URL }}/${ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}"
           
           echo "Updating deployment.yaml with image: $IMAGE_FULL"
           
@@ -226,53 +488,47 @@ jobs:
             echo "✅ Manifests updated and pushed to repository"
           fi
       
-      - name: Upload backup artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: deployment-backup-${{ steps.image-tag.outputs.tag }}
-          path: backups/
-          retention-days: 30
-      
       - name: Create deployment summary
         run: |
           echo "### 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### 📊 Error Budget" >> $GITHUB_STEP_SUMMARY
+          echo "- **Remaining:** ${{ needs.check-error-budget.outputs.error_budget_remaining }}%" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status:** ✅ Sufficient for deployment" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "#### 🐳 Pushed Images" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ steps.image-tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:latest\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "#### 📝 Manifest Update" >> $GITHUB_STEP_SUMMARY
-          echo "Updated \`k8s-manifests/demo/deployment.yaml\` with new image tag" >> $GITHUB_STEP_SUMMARY
+          echo "#### 💾 Backup Information" >> $GITHUB_STEP_SUMMARY
+          echo "- **Previous version:** \`${{ needs.backup-strategy.outputs.previous-tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Backup file:** \`${{ needs.backup-strategy.outputs.backup-file }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total backups:** ${{ needs.backup-strategy.outputs.backup-count }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Retention:** ${BACKUP_RETENTION_DAYS} days" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "#### 💾 Backup" >> $GITHUB_STEP_SUMMARY
-          echo "Previous version: \`${{ steps.backup.outputs.previous_tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "#### ⏱️ Build Metrics" >> $GITHUB_STEP_SUMMARY
+          echo "- **Duration:** ${BUILD_DURATION}s" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "#### ⏱️ Timing" >> $GITHUB_STEP_SUMMARY
-          echo "Build duration: ${BUILD_DURATION}s" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "#### 🔄 ArgoCD Sync" >> $GITHUB_STEP_SUMMARY
-          echo "ArgoCD will automatically sync the changes within 3 minutes" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "#### 📊 Monitoring" >> $GITHUB_STEP_SUMMARY
-          echo "- [View in Grafana](${GRAFANA_URL}/d/cicd-pipeline)" >> $GITHUB_STEP_SUMMARY
-          echo "- [View Prometheus Metrics](${PROMETHEUS_PUSHGATEWAY})" >> $GITHUB_STEP_SUMMARY
-  # Job 4: Generate SLO Metrics với Sloth
+          echo "#### 🔄 Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "- ArgoCD will sync changes within 3 minutes" >> $GITHUB_STEP_SUMMARY
+          echo "- Monitor: [Grafana Dashboard](${GRAFANA_URL}/d/cicd-pipeline)" >> $GITHUB_STEP_SUMMARY
+          echo "- Rollback if needed: Download backup artifact or use rollback script" >> $GITHUB_STEP_SUMMARY
+
+  # Job 6: Generate SLO Metrics
   slo-metrics:
     runs-on: ubuntu-latest
     needs: build-and-push
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
     
-      - name: Install Sloth v0.15.0
+      - name: Install Sloth
         run: |
           VERSION="0.15.0"
-          echo "📦 Installing Sloth v${VERSION}..."
           wget https://github.com/slok/sloth/releases/download/v${VERSION}/sloth-linux-amd64
           chmod +x sloth-linux-amd64
           sudo mv sloth-linux-amd64 /usr/local/bin/sloth
-        
-          echo "✅ Sloth installed:"
           sloth version
     
       - name: Create SLO specification
@@ -303,9 +559,6 @@ jobs:
                 page_alert:
                   labels:
                     severity: "critical"
-                ticket_alert:
-                  labels:
-                    severity: "warning"
           
             - name: "build-duration"
               objective: 95
@@ -313,55 +566,41 @@ jobs:
               sli:
                 raw:
                   error_ratio_query: |
-                    (
-                      sum(rate(cicd_build_duration_seconds{image="nginx"}[{{.window}}]) > 300)
-                    )
+                    sum(rate(cicd_build_duration_seconds{image="nginx"}[{{.window}}]) > 300)
                     /
                     sum(rate(cicd_build_duration_seconds{image="nginx"}[{{.window}}]) > 0)
               alerting:
                 name: BuildDuration
                 labels:
                   category: "performance"
-                page_alert:
-                  labels:
-                    severity: "warning"
           EOF
     
       - name: Generate Prometheus rules
         run: |
           sloth generate -i slo-spec.yaml -o prometheus-slo-rules.yaml
-         
-          echo "=== Generated SLO rules ==="
-          echo "Recording rules: $(grep -c '  - record:' prometheus-slo-rules.yaml || echo 0)"
-          echo "Alert rules: $(grep -c '  - alert:' prometheus-slo-rules.yaml || echo 0)"
-        
-          echo ""
-          echo "=== First 50 lines of generated rules ==="
           head -50 prometheus-slo-rules.yaml
      
-      - name: Upload SLO rules artifact
+      - name: Upload SLO rules
         uses: actions/upload-artifact@v4
         with:
           name: prometheus-slo-rules
           path: prometheus-slo-rules.yaml
           retention-days: 30
     
-      - name: Push SLO generation metrics
+      - name: Push SLO metrics
         run: |
           cat <<EOF | curl --data-binary @- ${PROMETHEUS_PUSHGATEWAY}/metrics/job/cicd_slo/instance/${GITHUB_RUN_ID}
           # HELP cicd_slo_generated SLO rules generation status
           # TYPE cicd_slo_generated gauge
           cicd_slo_generated{service="${IMAGE_NAME}"} 1
-          # HELP cicd_slo_generation_timestamp_seconds SLO generation timestamp
-          # TYPE cicd_slo_generation_timestamp_seconds gauge
-          cicd_slo_generation_timestamp_seconds{service="${IMAGE_NAME}"} $(date +%s)
           EOF
 
-  # Job 5: Post-deployment verification
+  # Job 7: Verify Deployment
   verify-deployment:
     runs-on: ubuntu-latest
     needs: build-and-push
     if: always()
+    
     steps:
       - name: Wait for ArgoCD sync
         run: |
@@ -370,10 +609,8 @@ jobs:
       
       - name: Check deployment status
         run: |
-          # Giả sử bạn có kubectl configured hoặc sử dụng ArgoCD API
           echo "Checking deployment status..."
           # kubectl rollout status deployment/${IMAGE_NAME} -n demo
-          # hoặc dùng ArgoCD CLI/API
       
       - name: Push deployment metrics
         if: always()
@@ -387,10 +624,11 @@ jobs:
           cicd_deployment_timestamp_seconds{image="${IMAGE_NAME}"} $(date +%s)
           EOF
 
-  # Job 6: Rollback (chỉ chạy khi manual trigger)
+  # Job 8: Rollback (manual trigger)
   rollback:
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -398,17 +636,9 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
       
-      - name: Download backup
-        uses: actions/download-artifact@v4
-        with:
-          name: deployment-backup-${{ github.event.inputs.rollback_tag }}
-          path: backups/
-      
       - name: Rollback to previous version
         run: |
           echo "Rolling back to previous version..."
-          
-          # Lấy tag trước đó từ git history
           PREVIOUS_COMMIT=$(git log --grep="Update image to" -n 2 --pretty=format:"%H" | tail -1)
           git checkout $PREVIOUS_COMMIT -- k8s-manifests/demo/deployment.yaml
           
