@@ -55,39 +55,13 @@ jobs:
           # Encode query for URL
           ENCODED_QUERY=$(echo "$QUERY" | jq -sRr @uri)
           
-          # Query Prometheus with error handling
-          RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" "http://${PROMETHEUS_URL}/api/v1/query?query=${ENCODED_QUERY}")
+          # Query Prometheus
+          RESPONSE=$(curl -s "${PROMETHEUS_URL}/api/v1/query?query=${ENCODED_QUERY}")
           
-          # Extract HTTP code
-          HTTP_CODE=$(echo "$RESPONSE" | grep "HTTP_CODE:" | cut -d: -f2)
-          BODY=$(echo "$RESPONSE" | sed '/HTTP_CODE:/d')
+          echo "Response: $RESPONSE"
           
-          echo "HTTP Code: $HTTP_CODE"
-          echo "Response Body: $BODY"
-          
-          # Check if Prometheus is accessible
-          if [ "$HTTP_CODE" != "200" ] || [ -z "$BODY" ] || echo "$BODY" | grep -q "html"; then
-            echo "⚠️ Warning: Cannot query Prometheus (HTTP $HTTP_CODE)"
-            echo "This might be the first deployment or Prometheus is not accessible"
-            echo "Defaulting to 100% error budget (allowing deployment)"
-            ERROR_BUDGET="100"
-          else
-            # Try to parse JSON response
-            if echo "$BODY" | jq empty 2>/dev/null; then
-              ERROR_BUDGET=$(echo "$BODY" | jq -r '.data.result[0].value[1] // "100"')
-              
-              # Validate ERROR_BUDGET is a number
-              if ! [[ "$ERROR_BUDGET" =~ ^[0-9]+\.?[0-9]*$ ]]; then
-                echo "⚠️ Warning: Invalid error budget value: $ERROR_BUDGET"
-                echo "Defaulting to 100%"
-                ERROR_BUDGET="100"
-              fi
-            else
-              echo "⚠️ Warning: Invalid JSON response from Prometheus"
-              echo "Defaulting to 100% error budget"
-              ERROR_BUDGET="100"
-            fi
-          fi
+          # Parse result
+          ERROR_BUDGET=$(echo "$RESPONSE" | jq -r '.data.result[0].value[1] // "100"')
           
           echo "error_budget=$ERROR_BUDGET" >> $GITHUB_OUTPUT
           echo "📊 Current Error Budget: ${ERROR_BUDGET}%"
@@ -120,16 +94,7 @@ jobs:
             exit 0
           fi
           
-          # Validate ERROR_BUDGET_INT is numeric
-          if ! [[ "$ERROR_BUDGET_INT" =~ ^[0-9]+$ ]]; then
-            echo "⚠️ Warning: Invalid error budget integer: $ERROR_BUDGET_INT"
-            echo "Allowing deployment to proceed"
-            echo "can_deploy=true" >> $GITHUB_OUTPUT
-            echo "error_budget=$ERROR_BUDGET" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          if (( ERROR_BUDGET_INT < THRESHOLD )); then
+          if (( $(echo "$ERROR_BUDGET_INT < $THRESHOLD" | bc -l) )); then
             echo "❌ DEPLOYMENT BLOCKED!"
             echo "Error budget (${ERROR_BUDGET}%) is below threshold (${THRESHOLD}%)"
             echo ""
@@ -499,7 +464,7 @@ jobs:
       - name: Update Kubernetes manifests
         run: |
           IMAGE_TAG="${{ steps.image-tag.outputs.tag }}"
-          IMAGE_FULL="${{ env.HARBOR_URL }}/${ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}"
+          IMAGE_FULL="${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}"
           
           echo "Updating deployment.yaml with image: $IMAGE_FULL"
           
