@@ -1,0 +1,251 @@
+{
+  "dashboard": {
+    "title": "CI/CD Pipeline Monitoring",
+    "tags": ["cicd", "devops", "pipeline"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "title": "Build Success Rate",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 6, "x": 0, "y": 0},
+        "targets": [
+          {
+            "expr": "sum(rate(cicd_build_status{status=\"1\"}[5m])) / sum(rate(cicd_build_status[5m])) * 100",
+            "legendFormat": "Success Rate %"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "red"},
+                {"value": 95, "color": "yellow"},
+                {"value": 99, "color": "green"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "Deployment Success Rate",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 6, "x": 6, "y": 0},
+        "targets": [
+          {
+            "expr": "sum(rate(cicd_deployment_status{status=\"1\"}[5m])) / sum(rate(cicd_deployment_status[5m])) * 100",
+            "legendFormat": "Success Rate %"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "red"},
+                {"value": 98, "color": "yellow"},
+                {"value": 99.9, "color": "green"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "Critical Vulnerabilities",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 6, "x": 12, "y": 0},
+        "targets": [
+          {
+            "expr": "sum(cicd_vulnerabilities_total{severity=\"critical\"})",
+            "legendFormat": "Critical"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "green"},
+                {"value": 1, "color": "red"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "Average Build Duration",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 6, "x": 18, "y": 0},
+        "targets": [
+          {
+            "expr": "avg(cicd_build_duration_seconds)",
+            "legendFormat": "Avg Duration"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "green"},
+                {"value": 180, "color": "yellow"},
+                {"value": 300, "color": "red"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "Build Status Over Time",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+        "targets": [
+          {
+            "expr": "cicd_build_status",
+            "legendFormat": "{{image}} - {{branch}}"
+          }
+        ]
+      },
+      {
+        "title": "Vulnerabilities by Severity",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+        "targets": [
+          {
+            "expr": "cicd_vulnerabilities_total{severity=\"critical\"}",
+            "legendFormat": "Critical"
+          },
+          {
+            "expr": "cicd_vulnerabilities_total{severity=\"high\"}",
+            "legendFormat": "High"
+          },
+          {
+            "expr": "cicd_vulnerabilities_total{severity=\"medium\"}",
+            "legendFormat": "Medium"
+          }
+        ]
+      },
+      {
+        "title": "Build Duration Trend",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+        "targets": [
+          {
+            "expr": "cicd_build_duration_seconds",
+            "legendFormat": "{{image}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s"
+          }
+        }
+      },
+      {
+        "title": "Recent Deployments",
+        "type": "table",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+        "targets": [
+          {
+            "expr": "cicd_deployment_timestamp_seconds",
+            "format": "table",
+            "instant": true
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "excludeByName": {},
+              "indexByName": {},
+              "renameByName": {
+                "image": "Image",
+                "tag": "Tag",
+                "environment": "Environment",
+                "Value": "Timestamp"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "title": "Test Execution Status",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 0, "y": 24},
+        "targets": [
+          {
+            "expr": "cicd_test_status{job=\"unit_tests\"}",
+            "legendFormat": "Unit Tests"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "mappings": [
+              {"type": "value", "options": {"0": {"text": "Failed", "color": "red"}}},
+              {"type": "value", "options": {"1": {"text": "Passed", "color": "green"}}}
+            ]
+          }
+        }
+      },
+      {
+        "title": "Rollback Count (24h)",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 6, "y": 24},
+        "targets": [
+          {
+            "expr": "sum(increase(cicd_rollback_total[24h]))",
+            "legendFormat": "Rollbacks"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "green"},
+                {"value": 1, "color": "yellow"},
+                {"value": 3, "color": "red"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "Pipeline Error Budget (30d)",
+        "type": "gauge",
+        "gridPos": {"h": 4, "w": 12, "x": 12, "y": 24},
+        "targets": [
+          {
+            "expr": "(1 - (sum(rate(cicd_deployment_status{status=\"0\"}[30d])) / sum(rate(cicd_deployment_status[30d])))) * 100",
+            "legendFormat": "Error Budget Remaining"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "min": 0,
+            "max": 100,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "red"},
+                {"value": 50, "color": "yellow"},
+                {"value": 99, "color": "green"}
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "refresh": "30s",
+    "time": {
+      "from": "now-6h",
+      "to": "now"
+    }
+  }
+}

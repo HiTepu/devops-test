@@ -1,0 +1,146 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cicd-alerts
+  namespace: monitoring
+  labels:
+    prometheus: k8s
+    role: alert-rules
+spec:
+  groups:
+  - name: cicd_pipeline_alerts
+    interval: 30s
+    rules:
+
+    # ================= BUILD =================
+    - alert: BuildFailureRate
+      expr: |
+        (
+          sum(rate(cicd_build_status{status="0"}[5m]))
+          /
+          sum(rate(cicd_build_status[5m]))
+        ) * 100 > 5
+      for: 5m
+      labels:
+        severity: warning
+        category: build
+      annotations:
+        summary: "High build failure rate"
+        description: "Build failure rate is {{ $value | humanizePercentage }}"
+
+    - alert: BuildDurationHigh
+      expr: cicd_build_duration_seconds > 300
+      for: 2m
+      labels:
+        severity: warning
+        category: performance
+      annotations:
+        summary: "Build duration too long"
+        description: "Build {{ $labels.image }} took {{ $value }}s"
+
+    - alert: ConsecutiveBuildFailures
+      expr: |
+        sum(increase(cicd_build_status{status="0"}[15m])) >= 3
+      for: 1m
+      labels:
+        severity: critical
+        category: build
+      annotations:
+        summary: "Multiple build failures"
+        description: "3+ build failures in 15 minutes"
+
+    # ================= SECURITY =================
+    - alert: CriticalVulnerabilitiesDetected
+      expr: cicd_vulnerabilities_total{severity="critical"} > 0
+      for: 1m
+      labels:
+        severity: critical
+        category: security
+      annotations:
+        summary: "Critical vulnerabilities found"
+        description: "{{ $value }} critical vulnerabilities detected"
+        action: "Fix immediately"
+
+    - alert: HighVulnerabilityThreshold
+      expr: cicd_vulnerabilities_total{severity="high"} > 10
+      for: 5m
+      labels:
+        severity: warning
+        category: security
+      annotations:
+        summary: "Too many HIGH vulnerabilities"
+        description: "{{ $value }} high severity vulnerabilities"
+
+    - alert: VulnerabilityScanMissing
+      expr: |
+        absent(cicd_vulnerabilities_total)
+      for: 10m
+      labels:
+        severity: warning
+        category: security
+      annotations:
+        summary: "Vulnerability scan missing"
+        description: "No vulnerability metrics reported"
+
+    # ================= DEPLOY =================
+    - alert: DeploymentFailure
+      expr: cicd_deployment_status{status="0"} == 1
+      for: 1m
+      labels:
+        severity: critical
+        category: deployment
+      annotations:
+        summary: "Deployment failed"
+        description: "Deployment failed for {{ $labels.image }}"
+
+    - alert: LowDeploymentSuccessRate
+      expr: |
+        (
+          sum(rate(cicd_deployment_status{status="1"}[1h]))
+          /
+          sum(rate(cicd_deployment_status[1h]))
+        ) * 100 < 99
+      for: 10m
+      labels:
+        severity: warning
+        category: deployment
+      annotations:
+        summary: "Low deployment success rate"
+        description: "Deployment success rate < 99%"
+
+    # ================= PIPELINE HEALTH =================
+    - alert: PipelineStalled
+      expr: |
+        time() - cicd_build_timestamp_seconds > 3600
+      for: 10m
+      labels:
+        severity: warning
+        category: pipeline
+      annotations:
+        summary: "Pipeline stalled"
+        description: "No build activity for over 1 hour"
+
+  - name: cicd_slo_recording
+    interval: 1m
+    rules:
+
+    - record: cicd:build_success_rate:5m
+      expr: |
+        sum(rate(cicd_build_status{status="1"}[5m]))
+        /
+        sum(rate(cicd_build_status[5m]))
+
+    - record: cicd:deployment_success_rate:5m
+      expr: |
+        sum(rate(cicd_deployment_status{status="1"}[5m]))
+        /
+        sum(rate(cicd_deployment_status[5m]))
+
+    - record: cicd:error_budget:30d
+      expr: |
+        1 -
+        (
+          sum(rate(cicd_deployment_status{status="0"}[30d]))
+          /
+          sum(rate(cicd_deployment_status[30d]))
+        )

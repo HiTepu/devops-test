@@ -1,0 +1,235 @@
+groups:
+  - name: cicd_pipeline_alerts
+    interval: 30s
+    rules:
+      # Build Alerts
+      - alert: BuildFailureRate
+        expr: |
+          (sum(rate(cicd_build_status{status="0"}[5m])) 
+          / sum(rate(cicd_build_status[5m]))) * 100 > 5
+        for: 5m
+        labels:
+          severity: warning
+          category: build
+        annotations:
+          summary: "High build failure rate detected"
+          description: "Build failure rate is {{ $value | humanizePercentage }} in the last 5 minutes"
+          dashboard: "http://grafana.monitoring.svc.cluster.local:3000/d/cicd-pipeline"
+
+      - alert: BuildDurationHigh
+        expr: cicd_build_duration_seconds > 300
+        for: 2m
+        labels:
+          severity: warning
+          category: performance
+        annotations:
+          summary: "Build duration exceeds 5 minutes"
+          description: "Build for {{ $labels.image }} took {{ $value }}s to complete"
+
+      - alert: ConsecutiveBuildFailures
+        expr: |
+          sum(changes(cicd_build_status{status="0"}[15m])) >= 3
+        for: 1m
+        labels:
+          severity: critical
+          category: build
+        annotations:
+          summary: "Multiple consecutive build failures"
+          description: "3 or more builds have failed in the last 15 minutes for {{ $labels.image }}"
+
+      # Security Alerts
+      - alert: CriticalVulnerabilitiesDetected
+        expr: cicd_vulnerabilities_total{severity="critical"} > 0
+        for: 1m
+        labels:
+          severity: critical
+          category: security
+        annotations:
+          summary: "Critical vulnerabilities found in image"
+          description: "{{ $value }} critical vulnerabilities detected in {{ $labels.image }}"
+          action: "Review Trivy scan results and patch immediately"
+
+      - alert: HighVulnerabilityThreshold
+        expr: cicd_vulnerabilities_total{severity="high"} > 10
+        for: 5m
+        labels:
+          severity: warning
+          category: security
+        annotations:
+          summary: "High number of HIGH severity vulnerabilities"
+          description: "{{ $value }} high severity vulnerabilities in {{ $labels.image }}"
+
+      - alert: VulnerabilityScanFailed
+        expr: |
+          absent(cicd_vulnerabilities_total) == 1 
+          and on() cicd_build_status == 1
+        for: 5m
+        labels:
+          severity: warning
+          category: security
+        annotations:
+          summary: "Vulnerability scan did not complete"
+          description: "Build succeeded but vulnerability metrics are missing"
+
+      # Deployment Alerts
+      - alert: DeploymentFailure
+        expr: cicd_deployment_status{status="0"} == 1
+        for: 1m
+        labels:
+          severity: critical
+          category: deployment
+        annotations:
+          summary: "Deployment failed"
+          description: "Deployment of {{ $labels.image }}:{{ $labels.tag }} to {{ $labels.environment }} failed"
+          action: "Check ArgoCD logs and consider rollback"
+
+      - alert: LowDeploymentSuccessRate
+        expr: |
+          (sum(rate(cicd_deployment_status{status="1"}[1h])) 
+          / sum(rate(cicd_deployment_status[1h]))) * 100 < 99
+        for: 10m
+        labels:
+          severity: warning
+          category: deployment
+        annotations:
+          summary: "Deployment success rate below SLO"
+          description: "Deployment success rate is {{ $value | humanizePercentage }} (SLO: 99%)"
+
+      - alert: NoDeploymentActivity
+        expr: |
+          absent_over_time(cicd_deployment_timestamp_seconds[24h])
+        for: 30m
+        labels:
+          severity: info
+          category: deployment
+        annotations:
+          summary: "No deployments in the last 24 hours"
+          description: "No deployment activity detected for {{ $labels.image }}"
+
+      # Test Alerts
+      - alert: TestFailures
+        expr: cicd_test_status{status="0"} == 1
+        for: 1m
+        labels:
+          severity: warning
+          category: testing
+        annotations:
+          summary: "Tests failed"
+          description: "{{ $labels.job }} tests failed for branch {{ $labels.branch }}"
+
+      - alert: TestDurationIncreased
+        expr: |
+          cicd_test_duration_seconds > 
+          (avg_over_time(cicd_test_duration_seconds[7d]) * 1.5)
+        for: 5m
+        labels:
+          severity: info
+          category: performance
+        annotations:
+          summary: "Test duration increased significantly"
+          description: "Test duration is 50% higher than 7-day average"
+
+      # SLO Alerts
+      - alert: ErrorBudgetExhausted
+        expr: |
+          (1 - (sum(rate(cicd_deployment_status{status="0"}[30d])) 
+          / sum(rate(cicd_deployment_status[30d])))) * 100 < 1
+        for: 5m
+        labels:
+          severity: critical
+          category: slo
+        annotations:
+          summary: "Error budget exhausted"
+          description: "Less than 1% error budget remaining for the month"
+          action: "Freeze deployments and investigate stability issues"
+
+      - alert: ErrorBudgetLow
+        expr: |
+          (1 - (sum(rate(cicd_deployment_status{status="0"}[30d])) 
+          / sum(rate(cicd_deployment_status[30d])))) * 100 < 10
+        for: 10m
+        labels:
+          severity: warning
+          category: slo
+        annotations:
+          summary: "Error budget running low"
+          description: "Only {{ $value }}% error budget remaining for the month"
+
+      # Rollback Alerts
+      - alert: FrequentRollbacks
+        expr: sum(increase(cicd_rollback_total[24h])) > 2
+        for: 5m
+        labels:
+          severity: warning
+          category: stability
+        annotations:
+          summary: "Multiple rollbacks in 24 hours"
+          description: "{{ $value }} rollbacks performed in the last 24 hours"
+          action: "Investigate root cause of deployment failures"
+
+      - alert: RollbackAfterDeployment
+        expr: |
+          sum(increase(cicd_rollback_total[5m])) > 0 
+          and on() 
+          sum(increase(cicd_deployment_status[5m])) > 0
+        for: 1m
+        labels:
+          severity: critical
+          category: stability
+        annotations:
+          summary: "Immediate rollback after deployment"
+          description: "Rollback occurred within 5 minutes of deployment"
+
+      # Pipeline Health
+      - alert: PipelineStalled
+        expr: |
+          time() - cicd_build_timestamp_seconds{} > 3600
+        for: 10m
+        labels:
+          severity: warning
+          category: pipeline
+        annotations:
+          summary: "Pipeline appears stalled"
+          description: "No build activity for {{ $labels.image }} in over 1 hour"
+
+      - alert: HighBuildQueueTime
+        expr: |
+          cicd_build_timestamp_seconds - cicd_build_start_timestamp_seconds > 300
+        for: 5m
+        labels:
+          severity: info
+          category: performance
+        annotations:
+          summary: "Builds are queuing longer than expected"
+          description: "Build wait time exceeds 5 minutes"
+
+  - name: cicd_slo_alerts
+    interval: 1m
+    rules:
+      # SLO Recording Rules
+      - record: cicd:build_success_rate:5m
+        expr: |
+          sum(rate(cicd_build_status{status="1"}[5m])) 
+          / sum(rate(cicd_build_status[5m]))
+
+      - record: cicd:deployment_success_rate:5m
+        expr: |
+          sum(rate(cicd_deployment_status{status="1"}[5m])) 
+          / sum(rate(cicd_deployment_status[5m]))
+
+      - record: cicd:error_budget:30d
+        expr: |
+          1 - (sum(rate(cicd_deployment_status{status="0"}[30d])) 
+          / sum(rate(cicd_deployment_status[30d])))
+
+      - record: cicd:vulnerability_score:latest
+        expr: |
+          (cicd_vulnerabilities_total{severity="critical"} * 10) +
+          (cicd_vulnerabilities_total{severity="high"} * 5) +
+          (cicd_vulnerabilities_total{severity="medium"} * 1)
+
+      - record: cicd:build_duration:p95
+        expr: histogram_quantile(0.95, cicd_build_duration_seconds)
+
+      - record: cicd:build_duration:p99
+        expr: histogram_quantile(0.99, cicd_build_duration_seconds)
