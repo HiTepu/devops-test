@@ -6,133 +6,121 @@ labels:
   owner: "sre-team"
 
 slos:
-
-  # 1. Deployment Availability
-  - name: deployment-availability
+  # 1️⃣ Deployment Success Rate
+  - name: "deployment-availability"
     objective: 99.9
     description: "Deployments should succeed 99.9% of the time"
     sli:
-      events:
-        error_query: |
-          sum(rate(cicd_deployment_status{status="0"}[5m]))
-        total_query: |
-          sum(rate(cicd_deployment_status[5m]))
+      raw:
+        error_ratio_query: |
+          sum(rate(cicd_deployment_status{status="0"}[{{.window}}]))
+          /
+          sum(rate(cicd_deployment_status[{{.window}}]))
     alerting:
       name: DeploymentAvailability
-      labels:
-        category: availability
-        component: deployment
+      page_alert:
+        labels:
+          severity: critical
+      ticket_alert:
+        labels:
+          severity: warning
 
-  # 2. Build Availability
-  - name: build-availability
+  # 2️⃣ Build Success Rate
+  - name: "build-availability"
     objective: 99.5
     description: "Builds should succeed 99.5% of the time"
     sli:
-      events:
-        error_query: |
-          sum(rate(cicd_build_status{status="0"}[5m]))
-        total_query: |
-          sum(rate(cicd_build_status[5m]))
+      raw:
+        error_ratio_query: |
+          sum(rate(cicd_build_status{status="0"}[{{.window}}]))
+          /
+          sum(rate(cicd_build_status[{{.window}}]))
     alerting:
       name: BuildAvailability
-      labels:
-        category: availability
-        component: build
+      page_alert:
+        labels:
+          severity: critical
 
-  # 3. Build Latency (error = build > 5 minutes)
-  - name: build-latency
+  # 3️⃣ Build Latency (P95 < 5m)
+  - name: "build-latency"
     objective: 95
-    description: "95% of builds should complete within 5 minutes"
+    description: "95% of builds complete under 5 minutes"
     sli:
-      events:
-        error_query: |
-          sum(rate(cicd_build_duration_seconds_bucket{le="+Inf"}[5m]))
-          -
-          sum(rate(cicd_build_duration_seconds_bucket{le="300"}[5m]))
-        total_query: |
-          sum(rate(cicd_build_duration_seconds_bucket{le="+Inf"}[5m]))
+      raw:
+        error_ratio_query: |
+          (
+            sum(rate(cicd_build_duration_bucket{le="+Inf"}[{{.window}}]))
+            -
+            sum(rate(cicd_build_duration_bucket{le="300"}[{{.window}}]))
+          )
+          /
+          sum(rate(cicd_build_duration_bucket{le="+Inf"}[{{.window}}]))
     alerting:
       name: BuildLatency
-      labels:
-        category: latency
-        component: build
+      page_alert:
+        labels:
+          severity: warning
 
-  # 4. Test Availability
-  - name: test-availability
+  # 4️⃣ Test Success Rate
+  - name: "test-availability"
     objective: 99
     description: "Tests should pass 99% of the time"
     sli:
-      events:
-        error_query: |
-          sum(rate(cicd_test_status{status="0"}[5m]))
-        total_query: |
-          sum(rate(cicd_test_status[5m]))
+      raw:
+        error_ratio_query: |
+          sum(rate(cicd_test_status{status="0"}[{{.window}}]))
+          /
+          sum(rate(cicd_test_status[{{.window}}]))
     alerting:
       name: TestAvailability
-      labels:
-        category: quality
-        component: testing
+      ticket_alert:
+        labels:
+          severity: warning
 
-  # 5. Security Scan Availability
-  - name: security-scan-availability
+  # 5️⃣ Security Scan Completion
+  - name: "security-scan-availability"
     objective: 99.9
-    description: "Security scans should complete successfully 99.9% of the time"
+    description: "Security scans should succeed"
     sli:
-      events:
-        error_query: |
-          sum(rate(cicd_security_scan_status{status="0"}[5m]))
-        total_query: |
-          sum(rate(cicd_security_scan_status[5m]))
+      raw:
+        error_ratio_query: |
+          sum(rate(cicd_security_scan_status{status="0"}[{{.window}}]))
+          /
+          sum(rate(cicd_security_scan_status[{{.window}}]))
     alerting:
       name: SecurityScanAvailability
-      labels:
-        category: security
-        component: scanning
+      page_alert:
+        labels:
+          severity: critical
 
-  # 6. Critical Vulnerabilities (ZERO tolerance)
-  - name: critical-vulnerability-rate
+  # 6️⃣ Zero Critical Vulnerabilities
+  - name: "critical-vulnerabilities"
     objective: 100
-    description: "No builds should contain critical vulnerabilities"
+    description: "No builds with critical vulnerabilities"
     sli:
-      events:
-        error_query: |
-          sum(rate(cicd_vulnerabilities_total{severity="critical"}[5m]))
-        total_query: |
-          sum(rate(cicd_build_status[5m]))
+      raw:
+        error_ratio_query: |
+          sum(rate(cicd_vulnerabilities_total{severity="critical"}[{{.window}}]))
+          /
+          sum(rate(cicd_build_status[{{.window}}]))
     alerting:
       name: CriticalVulnerabilities
-      labels:
-        category: security
-        component: vulnerability
+      page_alert:
+        labels:
+          severity: critical
 
-  # 7. Rollback Rate
-  - name: rollback-rate
+  # 7️⃣ Rollback Rate
+  - name: "rollback-rate"
     objective: 98
-    description: "Less than 2% of deployments should require rollback"
+    description: "Less than 2% deployments rollback"
     sli:
-      events:
-        error_query: |
-          sum(rate(cicd_rollback_total[5m]))
-        total_query: |
-          sum(rate(cicd_deployment_status[5m]))
+      raw:
+        error_ratio_query: |
+          sum(rate(cicd_rollback_total[{{.window}}]))
+          /
+          sum(rate(cicd_deployment_status[{{.window}}]))
     alerting:
-      name: HighRollbackRate
-      labels:
-        category: stability
-        component: deployment
-
-  # 8. ArgoCD Sync Availability
-  - name: argocd-sync-availability
-    objective: 99.9
-    description: "ArgoCD syncs should succeed 99.9% of the time"
-    sli:
-      events:
-        error_query: |
-          sum(rate(argocd_app_sync_status{phase="Failed"}[5m]))
-        total_query: |
-          sum(rate(argocd_app_sync_status[5m]))
-    alerting:
-      name: ArgoCDSyncAvailability
-      labels:
-        category: gitops
-        component: argocd
+      name: RollbackRate
+      ticket_alert:
+        labels:
+          severity: warning
