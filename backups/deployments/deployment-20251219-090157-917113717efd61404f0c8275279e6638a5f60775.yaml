@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: nginx
-        image: harbor.lmsx.io.vn/demo/nginx:03510c46093417238611339beb6bc964ee30e52d
+        image: harbor.lmsx.io.vn/demo/nginx:917113717efd61404f0c8275279e6638a5f60775
         ports:
         - containerPort: 80
         resources:
