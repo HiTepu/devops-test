@@ -524,6 +524,7 @@ jobs:
           
           for i in 1 2 3; do 
             echo "Push attempt $i..."
+
             git fetch origin main
             git rebase origin/main || git rebase --abort
             
@@ -564,8 +565,444 @@ jobs:
           echo "- ArgoCD will sync changes within 3 minutes" >> $GITHUB_STEP_SUMMARY
           echo "- Monitor: [Grafana Dashboard](${GRAFANA_URL}/d/cicd-pipeline)" >> $GITHUB_STEP_SUMMARY
           echo "- Rollback if needed: Download backup artifact or use rollback script" >> $GITHUB_STEP_SUMMARY
-
-  # Job 6: Generate SLO Metrics
+  # Job 6: Advanced Cleanup
+  cleanup:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: always()
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Docker system cleanup
+        run: |
+          echo "🧹 Starting Docker cleanup..."
+          
+          # 1. Remove dangling images
+          echo "Removing dangling images..."
+          docker image prune -f
+          
+          # 2. Remove unused images (older than 24h)
+          echo "Removing unused images..."
+          docker image prune -a -f --filter "until=24h"
+          
+          # 3. Remove stopped containers
+          echo "Removing stopped containers..."
+          docker container prune -f
+          
+          # 4. Remove unused volumes
+          echo "Removing unused volumes..."
+          docker volume prune -f
+          
+          # 5. Remove build cache (older than 24h)
+          echo "Removing build cache..."
+          docker builder prune -f --filter "until=24h"
+          
+          # 6. Remove networks
+          echo "Removing unused networks..."
+          docker network prune -f
+          
+          # 7. Clean up BuildKit cache
+          echo "Cleaning BuildKit cache..."
+          docker buildx prune -f --filter "until=48h"
+          
+          echo ""
+          echo "📊 Docker disk usage after cleanup:"
+          docker system df
+      
+      - name: Local artifacts cleanup
+        run: |
+          echo "🗑️ Cleaning local build artifacts..."
+          
+          # Remove scan results
+          rm -f trivy-results.sarif trivy-results.json
+          
+          # Remove temp files
+          rm -rf /tmp/docker-*
+          rm -rf /tmp/build-*
+          rm -rf /tmp/tmp.*
+          
+          # Clean apt cache
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+          
+          # Clean pip cache
+          rm -rf ~/.cache/pip
+          
+          # Clean npm cache
+          rm -rf ~/.npm
+          
+          echo "✅ Local cleanup completed"
+      
+      - name: Harbor registry cleanup
+        env:
+          HARBOR_USER: ${{ secrets.HARBOR_USERNAME }}
+          HARBOR_PASS: ${{ secrets.HARBOR_PASSWORD }}
+        run: |
+          echo "🐳 Cleaning up old Harbor images..."
+          
+          # Install required tools
+          sudo apt-get update
+          sudo apt-get install -y jq curl
+          
+          # Harbor API endpoint
+          HARBOR_API="https://${{ env.HARBOR_URL }}/api/v2.0"
+          PROJECT="${{ env.HARBOR_PROJECT }}"
+          REPO="${{ env.IMAGE_NAME }}"
+          
+          # Get auth token
+          echo "Getting Harbor token..."
+          TOKEN=$(curl -s -u "${HARBOR_USER}:${HARBOR_PASS}" \
+            "${HARBOR_API}/projects/${PROJECT}/repositories/${REPO}/artifacts" \
+            | jq -r '.[0].digest' > /dev/null 2>&1 && echo "authenticated" || echo "failed")
+          
+          if [ "$TOKEN" = "failed" ]; then
+            echo "⚠️ Warning: Cannot authenticate to Harbor. Skipping Harbor cleanup."
+            exit 0
+          fi
+          
+          # Get all artifacts (tags)
+          echo "Fetching artifacts from ${PROJECT}/${REPO}..."
+          ARTIFACTS=$(curl -s -u "${HARBOR_USER}:${HARBOR_PASS}" \
+            "${HARBOR_API}/projects/${PROJECT}/repositories/${REPO}/artifacts?page=1&page_size=100")
+          
+          # Keep configuration
+          KEEP_LATEST=10        # Keep 10 most recent tags
+          KEEP_DAYS=30          # Keep tags from last 30 days
+          KEEP_PROTECTED=true   # Keep protected tags
+          
+          # Get current timestamp
+          CURRENT_TIME=$(date +%s)
+          CUTOFF_TIME=$((CURRENT_TIME - (KEEP_DAYS * 86400)))
+          
+          echo "Cleanup policy:"
+          echo "  - Keep latest: ${KEEP_LATEST} tags"
+          echo "  - Keep tags from last: ${KEEP_DAYS} days"
+          echo "  - Protected tags: preserved"
+          echo ""
+          
+          # Parse and delete old artifacts
+          DELETED_COUNT=0
+          KEPT_COUNT=0
+          
+          echo "$ARTIFACTS" | jq -c '.[] | {digest: .digest, tags: .tags, push_time: .push_time}' | while read -r artifact; do
+            DIGEST=$(echo "$artifact" | jq -r '.digest')
+            TAGS=$(echo "$artifact" | jq -r '.tags[]?.name // "untagged"')
+            PUSH_TIME=$(echo "$artifact" | jq -r '.push_time')
+            
+            # Skip if no digest
+            [ -z "$DIGEST" ] && continue
+            
+            # Convert push_time to timestamp
+            PUSH_TIMESTAMP=$(date -d "$PUSH_TIME" +%s 2>/dev/null || echo "0")
+            
+            # Skip recent images
+            if [ "$PUSH_TIMESTAMP" -gt "$CUTOFF_TIME" ]; then
+              echo "⏭️  Keeping recent: $TAGS (pushed: $PUSH_TIME)"
+              KEPT_COUNT=$((KEPT_COUNT + 1))
+              continue
+            fi
+            
+            # Skip if it's "latest" tag
+            if echo "$TAGS" | grep -q "^latest$"; then
+              echo "📌 Keeping latest tag"
+              KEPT_COUNT=$((KEPT_COUNT + 1))
+              continue
+            fi
+            
+            # Check if we've kept enough recent ones
+            if [ "$KEPT_COUNT" -lt "$KEEP_LATEST" ]; then
+              echo "⏭️  Keeping (within latest ${KEEP_LATEST}): $TAGS"
+              KEPT_COUNT=$((KEPT_COUNT + 1))
+              continue
+            fi
+            
+            # Delete old artifact
+            echo "🗑️  Deleting old artifact: $TAGS (digest: ${DIGEST:0:12}...)"
+            
+            DELETE_RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" -X DELETE \
+              -u "${HARBOR_USER}:${HARBOR_PASS}" \
+              "${HARBOR_API}/projects/${PROJECT}/repositories/${REPO}/artifacts/${DIGEST}")
+            
+            HTTP_CODE=$(echo "$DELETE_RESPONSE" | grep "HTTP_CODE:" | cut -d: -f2)
+            
+            if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "202" ]; then
+              echo "  ✅ Deleted successfully"
+              DELETED_COUNT=$((DELETED_COUNT + 1))
+            else
+              echo "  ⚠️ Failed to delete (HTTP $HTTP_CODE)"
+            fi
+            
+            # Rate limiting
+            sleep 1
+          done
+          
+          echo ""
+          echo "📊 Harbor cleanup summary:"
+          echo "  - Artifacts deleted: ${DELETED_COUNT}"
+          echo "  - Artifacts kept: ${KEPT_COUNT}"
+          
+          # Trigger Harbor garbage collection (if you have admin access)
+          echo ""
+          echo "Triggering Harbor garbage collection..."
+          GC_RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" -X POST \
+            -u "${HARBOR_USER}:${HARBOR_PASS}" \
+            -H "Content-Type: application/json" \
+            -d '{"schedule":{"type":"Manual"},"delete_untagged":true}' \
+            "${HARBOR_API}/system/gc/schedule")
+          
+          GC_HTTP_CODE=$(echo "$GC_RESPONSE" | grep "HTTP_CODE:" | cut -d: -f2)
+          
+          if [ "$GC_HTTP_CODE" = "200" ] || [ "$GC_HTTP_CODE" = "201" ]; then
+            echo "✅ Garbage collection scheduled"
+          else
+            echo "⚠️ Could not schedule GC (might need admin privileges)"
+          fi
+      
+      - name: GitHub artifacts cleanup
+        uses: actions/github-script@v7
+        with:
+          script: |
+            console.log('🗂️ Cleaning up old GitHub artifacts...');
+            
+            const RETENTION_DAYS = 30;
+            const MAX_ARTIFACTS = 50;
+            const cutoffDate = new Date();
+            cutoffDate.setDate(cutoffDate.getDate() - RETENTION_DAYS);
+            
+            // Get all artifacts
+            const artifacts = await github.rest.actions.listArtifactsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100
+            });
+            
+            console.log(`Found ${artifacts.data.total_count} total artifacts`);
+            
+            // Filter artifacts to delete
+            const toDelete = artifacts.data.artifacts
+              .filter(artifact => {
+                const createdAt = new Date(artifact.created_at);
+                return createdAt < cutoffDate;
+              })
+              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+              .slice(MAX_ARTIFACTS); // Keep MAX_ARTIFACTS newest ones
+            
+            console.log(`Deleting ${toDelete.length} old artifacts...`);
+            
+            let deleted = 0;
+            let failed = 0;
+            
+            for (const artifact of toDelete) {
+              try {
+                await github.rest.actions.deleteArtifact({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  artifact_id: artifact.id
+                });
+                console.log(`✅ Deleted: ${artifact.name} (${artifact.size_in_bytes} bytes)`);
+                deleted++;
+              } catch (error) {
+                console.log(`❌ Failed to delete ${artifact.name}: ${error.message}`);
+                failed++;
+              }
+            }
+            
+            console.log(`\n📊 Artifacts cleanup summary:`);
+            console.log(`  - Deleted: ${deleted}`);
+            console.log(`  - Failed: ${failed}`);
+            console.log(`  - Retained: ${artifacts.data.total_count - deleted}`);
+      
+      - name: GitHub Actions cache cleanup
+        uses: actions/github-script@v7
+        with:
+          script: |
+            console.log('💾 Cleaning up old GitHub Actions caches...');
+            
+            const CACHE_RETENTION_DAYS = 7;
+            const cutoffDate = new Date();
+            cutoffDate.setDate(cutoffDate.getDate() - CACHE_RETENTION_DAYS);
+            
+            // Get all caches
+            const caches = await github.rest.actions.getActionsCacheList({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100
+            });
+            
+            console.log(`Found ${caches.data.total_count} total caches`);
+            
+            let deleted = 0;
+            let failed = 0;
+            
+            for (const cache of caches.data.actions_caches) {
+              const createdAt = new Date(cache.created_at);
+              
+              // Delete old caches
+              if (createdAt < cutoffDate) {
+                try {
+                  await github.rest.actions.deleteActionsCacheById({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    cache_id: cache.id
+                  });
+                  console.log(`✅ Deleted cache: ${cache.key} (${(cache.size_in_bytes / 1024 / 1024).toFixed(2)} MB)`);
+                  deleted++;
+                } catch (error) {
+                  console.log(`❌ Failed to delete cache ${cache.key}: ${error.message}`);
+                  failed++;
+                }
+              }
+            }
+            
+            console.log(`\n📊 Cache cleanup summary:`);
+            console.log(`  - Deleted: ${deleted}`);
+            console.log(`  - Failed: ${failed}`);
+      
+      - name: Cleanup old workflow runs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            console.log('🔄 Cleaning up old workflow runs...');
+            
+            const WORKFLOW_RETENTION_DAYS = 90;
+            const KEEP_SUCCESSFUL_RUNS = 50;
+            const cutoffDate = new Date();
+            cutoffDate.setDate(cutoffDate.getDate() - WORKFLOW_RETENTION_DAYS);
+            
+            // Get workflow runs
+            const runs = await github.rest.actions.listWorkflowRunsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100
+            });
+            
+            console.log(`Found ${runs.data.total_count} total workflow runs`);
+            
+            // Separate successful and failed runs
+            const successfulRuns = runs.data.workflow_runs
+              .filter(run => run.conclusion === 'success')
+              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+            
+            const failedRuns = runs.data.workflow_runs
+              .filter(run => run.conclusion !== 'success')
+              .filter(run => new Date(run.created_at) < cutoffDate);
+            
+            // Keep only latest N successful runs, delete old ones
+            const toDeleteSuccessful = successfulRuns.slice(KEEP_SUCCESSFUL_RUNS);
+            const toDelete = [...toDeleteSuccessful, ...failedRuns];
+            
+            console.log(`Deleting ${toDelete.length} old runs...`);
+            
+            let deleted = 0;
+            let failed = 0;
+            
+            for (const run of toDelete) {
+              try {
+                await github.rest.actions.deleteWorkflowRun({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: run.id
+                });
+                console.log(`✅ Deleted run #${run.run_number}: ${run.name} (${run.conclusion})`);
+                deleted++;
+              } catch (error) {
+                // Some runs might be protected or in progress
+                if (!error.message.includes('in progress')) {
+                  console.log(`⚠️ Could not delete run #${run.run_number}: ${error.message}`);
+                }
+                failed++;
+              }
+            }
+            
+            console.log(`\n📊 Workflow runs cleanup summary:`);
+            console.log(`  - Deleted: ${deleted}`);
+            console.log(`  - Failed/Protected: ${failed}`);
+      
+      - name: Report cleanup metrics
+        if: always()
+        run: |
+          # Get disk usage info
+          DISK_USED=$(df -BG / | tail -1 | awk '{print $3}' | sed 's/G//')
+          DISK_AVAILABLE=$(df -BG / | tail -1 | awk '{print $4}' | sed 's/G//')
+          DISK_PERCENT=$(df / | tail -1 | awk '{print $5}' | sed 's/%//')
+          
+          cat <<EOF | curl --data-binary @- ${PROMETHEUS_PUSHGATEWAY}/metrics/job/cicd_cleanup/instance/${GITHUB_RUN_ID}
+          # HELP cicd_cleanup_completed Cleanup completion status
+          # TYPE cicd_cleanup_completed gauge
+          cicd_cleanup_completed{image="${IMAGE_NAME}",type="docker"} 1
+          cicd_cleanup_completed{image="${IMAGE_NAME}",type="harbor"} 1
+          cicd_cleanup_completed{image="${IMAGE_NAME}",type="github_artifacts"} 1
+          cicd_cleanup_completed{image="${IMAGE_NAME}",type="github_cache"} 1
+          cicd_cleanup_completed{image="${IMAGE_NAME}",type="workflow_runs"} 1
+          # HELP cicd_disk_usage_bytes Disk usage in bytes
+          # TYPE cicd_disk_usage_bytes gauge
+          cicd_disk_usage_bytes{runner="github_actions",type="used"} $((DISK_USED * 1073741824))
+          cicd_disk_usage_bytes{runner="github_actions",type="available"} $((DISK_AVAILABLE * 1073741824))
+          # HELP cicd_disk_usage_percent Disk usage percentage
+          # TYPE cicd_disk_usage_percent gauge
+          cicd_disk_usage_percent{runner="github_actions"} ${DISK_PERCENT}
+          # HELP cicd_cleanup_timestamp_seconds Cleanup timestamp
+          # TYPE cicd_cleanup_timestamp_seconds gauge
+          cicd_cleanup_timestamp_seconds{image="${IMAGE_NAME}"} $(date +%s)
+          EOF
+      
+      - name: Generate cleanup summary
+        if: always()
+        run: |
+          echo "### 🧹 Advanced Cleanup Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "#### ✅ Cleaned Components:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "##### 🐳 Docker" >> $GITHUB_STEP_SUMMARY
+          echo "- Dangling images" >> $GITHUB_STEP_SUMMARY
+          echo "- Unused images (>24h)" >> $GITHUB_STEP_SUMMARY
+          echo "- Stopped containers" >> $GITHUB_STEP_SUMMARY
+          echo "- Unused volumes" >> $GITHUB_STEP_SUMMARY
+          echo "- Build cache (>24h)" >> $GITHUB_STEP_SUMMARY
+          echo "- BuildKit cache (>48h)" >> $GITHUB_STEP_SUMMARY
+          echo "- Unused networks" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "##### 🗂️ Local Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "- Security scan results" >> $GITHUB_STEP_SUMMARY
+          echo "- Temporary build files" >> $GITHUB_STEP_SUMMARY
+          echo "- Package manager caches (apt, pip, npm)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "##### 🐳 Harbor Registry" >> $GITHUB_STEP_SUMMARY
+          echo "- Old image tags (kept latest 10)" >> $GITHUB_STEP_SUMMARY
+          echo "- Images older than 30 days" >> $GITHUB_STEP_SUMMARY
+          echo "- Garbage collection triggered" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "##### 📦 GitHub" >> $GITHUB_STEP_SUMMARY
+          echo "- Old artifacts (>30 days, kept 50 newest)" >> $GITHUB_STEP_SUMMARY
+          echo "- Old caches (>7 days)" >> $GITHUB_STEP_SUMMARY
+          echo "- Old workflow runs (>90 days, kept 50 successful)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "#### 💾 Disk Usage:" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          df -h / | grep -E "Filesystem|/$" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "#### 🐳 Docker Disk Usage:" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          docker system df 2>/dev/null || echo "Docker info not available" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "#### 📊 Cleanup Policies:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Docker**: Keep images <24h, cache <48h" >> $GITHUB_STEP_SUMMARY
+          echo "- **Harbor**: Keep latest 10 tags, images <30 days" >> $GITHUB_STEP_SUMMARY
+          echo "- **GitHub Artifacts**: Keep <30 days, max 50 newest" >> $GITHUB_STEP_SUMMARY
+          echo "- **GitHub Caches**: Keep <7 days" >> $GITHUB_STEP_SUMMARY
+          echo "- **Workflow Runs**: Keep <90 days, latest 50 successful" >> $GITHUB_STEP_SUMMARY
+  # Job 7: Generate SLO Metrics
   slo-metrics:
     runs-on: ubuntu-latest
     needs: build-and-push
@@ -646,7 +1083,7 @@ jobs:
           cicd_slo_generated{service="${IMAGE_NAME}"} 1
           EOF
 
-  # Job 7: Verify Deployment
+  # Job 8: Verify Deployment
   verify-deployment:
     runs-on: ubuntu-latest
     needs: build-and-push
@@ -675,7 +1112,7 @@ jobs:
           cicd_deployment_timestamp_seconds{image="${IMAGE_NAME}"} $(date +%s)
           EOF
 
-  # Job 8: Rollback (manual trigger)
+  # Job 9: Rollback (manual trigger)
   rollback:
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'
